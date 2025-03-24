@@ -38,14 +38,29 @@ services:
       - init
       - memcached
 
-  k6-tracing:
-    image: ghcr.io/grafana/xk6-client-tracing:v0.0.7
-    environment:
-      - ENDPOINT=tempo:4317
-    restart: always
-    depends_on:
-      - tempo
+  vulture:
+    image: tempo-vulture:latest
+    ports:
+      - "8080"
+    command: "
+        -prometheus-listen-address=:8080 \
+        -tempo-push-url=http://tempo \
+        -tempo-query-url=http://tempo:3200 \
+        -tempo-retention-duration=336h \
+        -tempo-search-backoff-duration=5s \
+        -tempo-read-backoff-duration=10s \
+        -tempo-metrics-backoff-duration=5s \
+        -tempo-write-backoff-duration=10s \
+        -tempo-org-id=single-tenant"
 
+  # k6-tracing:
+  #   image: ghcr.io/grafana/xk6-client-tracing:v0.0.7
+  #   environment:
+  #     - ENDPOINT=tempo:4317
+  #   restart: always
+  #   depends_on:
+  #     - tempo
+  #
   prometheus:
     image: prom/prometheus:latest
     command:

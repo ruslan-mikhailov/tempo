@@ -17,3 +17,4 @@ scrape_configs:
         - 'querier:3200'
         - 'query-frontend:3200'
         - 'metrics-generator:3200'
+        - 'vulture:8080'
