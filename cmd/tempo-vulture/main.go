@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math"
 	"math/rand"
@@ -125,6 +126,13 @@ func main() {
 		panic(err)
 	}
 	httpClient := httpclient.New(vultureConfig.tempoQueryURL, vultureConfig.tempoOrgID)
+
+	// Create a logging RoundTripper
+	loggingTransport := &loggingRoundTripper{
+		next:   http.DefaultTransport,
+		logger: logger,
+	}
+	httpClient.WithTransport(loggingTransport)
 
 	tickerWrite, tickerRead, tickerSearch, tickerMetrics, err := initTickers(
 		vultureConfig.tempoWriteBackoffDuration,
@@ -651,8 +659,8 @@ func queryMetrics(client httpclient.TempoHTTPClient, seed time.Time, config vult
 	end := seed.Add(30 * time.Minute).Unix()
 
 	resp, err := client.MetricsQueryRange(
-		fmt.Sprintf(`{.%s = "%s"} | count_over_time()`, attr.Key, util.StringifyAnyValue(attr.Value)),
-		int(start), int(end), "1m", 0,
+		fmt.Sprintf(`{.%s = "%s"} | count_over_time() with(exemplars=true)`, attr.Key, util.StringifyAnyValue(attr.Value)),
+		int(start), int(end), "1m", 100,
 	)
 	if err != nil {
 		logger.Error("failed to query metrics", zap.Error(err))
@@ -771,4 +779,32 @@ func hasMissingSpans(t *tempopb.Trace) bool {
 	}
 
 	return false
+}
+
+type loggingRoundTripper struct {
+	next   http.RoundTripper
+	logger *zap.Logger
+}
+
+func (rt *loggingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	rt.logger.Info("Making HTTP request",
+		zap.String("method", req.Method),
+		zap.String("url", req.URL.String()),
+	)
+	// if !strings.Contains(req.URL.String(), "metrics") {
+	// 	return rt.next.RoundTrip(req)
+	// }
+	resp, err := rt.next.RoundTrip(req)
+	if err != nil {
+		return resp, err
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	resp.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+	rt.logger.Info("Received HTTP response",
+		zap.String("body", string(body)),
+	)
+	return resp, nil
 }
