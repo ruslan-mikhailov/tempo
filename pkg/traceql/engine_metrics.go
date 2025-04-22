@@ -1290,6 +1290,8 @@ func (e *MetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStar
 }
 
 func (e *MetricsEvaluator) Length() int {
+	e.mtx.Lock()
+	defer e.mtx.Unlock()
 	return e.metricsPipeline.length()
 }
 
