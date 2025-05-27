@@ -1378,7 +1378,7 @@ type histSeries struct {
 }
 
 type HistogramAggregator struct {
-	ss               map[string]histSeries
+	ss               map[string]*histSeries
 	qs               []float64
 	len              int
 	start, end, step uint64
@@ -1389,7 +1389,7 @@ func NewHistogramAggregator(req *tempopb.QueryRangeRequest, qs []float64) *Histo
 	l := IntervalCount(req.Start, req.End, req.Step)
 	return &HistogramAggregator{
 		qs:              qs,
-		ss:              make(map[string]histSeries),
+		ss:              make(map[string]*histSeries),
 		len:             l,
 		start:           req.Start,
 		end:             req.End,
@@ -1424,12 +1424,13 @@ func (h *HistogramAggregator) Combine(in []*tempopb.TimeSeries) {
 
 		withoutBucketStr := withoutBucket.String()
 
-		existing, ok := h.ss[withoutBucketStr]
-		if !ok {
-			existing = histSeries{
+		existing := h.ss[withoutBucketStr]
+		if existing == nil {
+			existing = &histSeries{
 				labels: withoutBucket,
 				hist:   make([]Histogram, h.len),
 			}
+			h.ss[withoutBucketStr] = existing
 		}
 
 		b := bucket.Float()
@@ -1466,7 +1467,6 @@ func (h *HistogramAggregator) Combine(in []*tempopb.TimeSeries) {
 				TimestampMs: uint64(exemplar.TimestampMs),
 			})
 		}
-		h.ss[withoutBucketStr] = existing
 	}
 }
 
