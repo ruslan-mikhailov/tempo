@@ -28,10 +28,11 @@ import (
 
 func requestWithDefaultRange(q string) *tempopb.QueryRangeRequest {
 	return &tempopb.QueryRangeRequest{
-		Start: 1,
-		End:   50 * uint64(time.Second),
-		Step:  15 * uint64(time.Second),
-		Query: q,
+		Start:     1,
+		End:       50 * uint64(time.Second),
+		Step:      15 * uint64(time.Second),
+		Query:     q,
+		Exemplars: 100,
 	}
 }
 
@@ -961,7 +962,7 @@ func TestTempoDBQueryRange(t *testing.T) {
 	for _, tc := range queryRangeTestCases {
 		t.Run(tc.name, func(t *testing.T) {
 			e := traceql.NewEngine()
-			eval, err := e.CompileMetricsQueryRange(tc.req, 0, 0, false)
+			eval, err := e.CompileMetricsQueryRange(tc.req, 100, 0, false)
 			require.NoError(t, err)
 
 			err = eval.Do(ctx, f, 0, 0, 0)
