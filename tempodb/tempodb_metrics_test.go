@@ -58,7 +58,7 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 0, Value: 14.0 / 15.0},     // First interval starts at 1, so it only has 14 spans
 					{TimestampMs: 15_000, Value: 1.0},        // Spans every 1 second
 					{TimestampMs: 30_000, Value: 1.0},        // Spans every 1 second
-					{TimestampMs: 45_000, Value: 5.0 / 5.0}, // Interval [45,50) has 5 spans
+					{TimestampMs: 45_000, Value: 5.0 / 15.0}, // Interval [45,50) has 5 spans
 					{TimestampMs: 60_000, Value: 0},          // I think this is a bug that we extend out an extra interval
 				},
 			},
@@ -72,7 +72,7 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 0, Value: 2 * 14.0 / 15.0},
 					{TimestampMs: 15_000, Value: 2 * 1.0},
 					{TimestampMs: 30_000, Value: 2 * 1.0},
-					{TimestampMs: 45_000, Value: 2 * 5.0 / 5.0},
+					{TimestampMs: 45_000, Value: 2 * 5.0 / 15.0},
 					{TimestampMs: 60_000, Value: 0},
 				},
 			},
