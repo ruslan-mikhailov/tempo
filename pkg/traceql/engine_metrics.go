@@ -56,7 +56,7 @@ func IntervalCount(start, end, step uint64) int {
 	end = alignEnd(end, step)
 
 	intervals := (end - start) / step
-	intervals++
+	// intervals++ // TODO: BUG: edge case where end is already aligned to step. Should we leave it?
 	return int(intervals)
 }
 

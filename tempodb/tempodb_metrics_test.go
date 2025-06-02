@@ -59,7 +59,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 1.0},        // Spans every 1 second
 					{TimestampMs: 30_000, Value: 1.0},        // Spans every 1 second
 					{TimestampMs: 45_000, Value: 5.0 / 15.0}, // Interval [45,50) has 5 spans
-					{TimestampMs: 60_000, Value: 0},          // I think this is a bug that we extend out an extra interval
 				},
 			},
 		},
@@ -73,7 +72,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 2 * 1.0},
 					{TimestampMs: 30_000, Value: 2 * 1.0},
 					{TimestampMs: 45_000, Value: 2 * 5.0 / 15.0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -90,7 +88,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 7.0 / 15.0}, // Interval [15, 29], 7 spans at 16, 18, 20, 22, 24, 26, 28
 					{TimestampMs: 30_000, Value: 8.0 / 15.0}, // Interval [30, 44], 8 spans at 30, 32, 34, 36, 38, 40, 42, 44
 					{TimestampMs: 45_000, Value: 2.0 / 15.0}, // Interval [45, 50), 2 spans at 46, 48
-					{TimestampMs: 60_000, Value: 0},          // I think this is a bug that we extend out an extra interval
 				},
 			},
 		},
@@ -104,7 +101,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 2 * 7.0 / 15.0},
 					{TimestampMs: 30_000, Value: 2 * 8.0 / 15.0},
 					{TimestampMs: 45_000, Value: 2 * 2.0 / 15.0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -121,7 +117,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -138,7 +133,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 15}, // Interval [15, 29], 15 spans
 					{TimestampMs: 30_000, Value: 15}, // Interval [30, 44], 15 spans
 					{TimestampMs: 45_000, Value: 5},  // Interval [45, 50), 5 spans
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -152,7 +146,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 2 * 15},
 					{TimestampMs: 30_000, Value: 2 * 15},
 					{TimestampMs: 45_000, Value: 2 * 5},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -169,7 +162,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 7}, // [16, 18, 20, 22, 24, 26, 28] - total: 7
 					{TimestampMs: 30_000, Value: 8}, // [30, 32, 34, 36, 38, 40, 42, 44] - total: 8
 					{TimestampMs: 45_000, Value: 2}, // [46, 48]
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -180,7 +172,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 8}, // [15, 17, 19, 21, 23, 25, 27, 29] - total: 8
 					{TimestampMs: 30_000, Value: 7}, // [31, 33, 35, 37, 39, 41, 43] - total: 7
 					{TimestampMs: 45_000, Value: 3}, // [45, 47, 49] - total: 3
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -193,7 +184,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 2 * 7},
 					{TimestampMs: 30_000, Value: 2 * 8},
 					{TimestampMs: 45_000, Value: 2 * 2},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -204,7 +194,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 2 * 8},
 					{TimestampMs: 30_000, Value: 2 * 7},
 					{TimestampMs: 45_000, Value: 2 * 3},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -326,7 +315,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -337,7 +325,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -348,7 +335,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -359,7 +345,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -370,7 +355,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 3},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -381,7 +365,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 12}, // and so on
 					{TimestampMs: 30_000, Value: 5},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -392,7 +375,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 10},
 					{TimestampMs: 45_000, Value: 5},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -405,7 +387,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -416,7 +397,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -427,7 +407,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -438,7 +417,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -449,7 +427,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 2 * 3},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -460,7 +437,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 2 * 12},
 					{TimestampMs: 30_000, Value: 2 * 5},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -471,7 +447,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 2 * 10},
 					{TimestampMs: 45_000, Value: 2 * 5},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -491,7 +466,6 @@ var queryRangeTestCases = []struct {
 					// Actual q50 is 47
 					// 45 46 || 47 || 48 49
 					{TimestampMs: 45_000, Value: 48.592007999616804},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -508,7 +482,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -519,7 +492,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -530,7 +502,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -541,7 +512,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -552,7 +522,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 3},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -563,7 +532,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 12},
 					{TimestampMs: 30_000, Value: 5},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -574,7 +542,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 10},
 					{TimestampMs: 45_000, Value: 5},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -587,7 +554,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -598,7 +564,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -609,7 +574,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -620,7 +584,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -631,7 +594,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 2 * 3},
 					{TimestampMs: 30_000, Value: 0},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -642,7 +604,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 2 * 12},
 					{TimestampMs: 30_000, Value: 2 * 5},
 					{TimestampMs: 45_000, Value: 0},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 			{
@@ -653,7 +614,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 15_000, Value: 0},
 					{TimestampMs: 30_000, Value: 2 * 10},
 					{TimestampMs: 45_000, Value: 2 * 5},
-					{TimestampMs: 60_000, Value: 0},
 				},
 			},
 		},
@@ -683,7 +643,6 @@ var queryRangeTestCases = []struct {
 				Labels:     []common_v1.KeyValue{tempopb.MakeKeyValueString("__name__", "count_over_time")},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 0, Value: 2}, // 1, 2
-					{TimestampMs: 5_000, Value: 0},
 				},
 			},
 		},
@@ -693,7 +652,6 @@ var queryRangeTestCases = []struct {
 				Labels:     []common_v1.KeyValue{tempopb.MakeKeyValueString("__name__", "count_over_time")},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 0, Value: 2 * 2},
-					{TimestampMs: 5_000, Value: 0},
 				},
 			},
 		},
@@ -712,7 +670,6 @@ var queryRangeTestCases = []struct {
 				Labels:     []common_v1.KeyValue{tempopb.MakeKeyValueString("__name__", "count_over_time")},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 0, Value: 4}, // 1, 2, 3, 4
-					{TimestampMs: 5_000, Value: 0},
 				},
 			},
 		},
@@ -722,7 +679,6 @@ var queryRangeTestCases = []struct {
 				Labels:     []common_v1.KeyValue{tempopb.MakeKeyValueString("__name__", "count_over_time")},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 0, Value: 2 * 4},
-					{TimestampMs: 5_000, Value: 0},
 				},
 			},
 		},
@@ -746,7 +702,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 1500, Value: 0},
 					{TimestampMs: 2000, Value: 1},
 					{TimestampMs: 2500, Value: 0},
-					{TimestampMs: 3000, Value: 0},
 				},
 			},
 		},
@@ -761,7 +716,6 @@ var queryRangeTestCases = []struct {
 					{TimestampMs: 1500, Value: 0},
 					{TimestampMs: 2000, Value: 2 * 1},
 					{TimestampMs: 2500, Value: 0},
-					{TimestampMs: 3000, Value: 0},
 				},
 			},
 		},
@@ -780,7 +734,6 @@ var expectedCompareTs = []*tempopb.TimeSeries{
 			{TimestampMs: 15_000, Value: 8},
 			{TimestampMs: 30_000, Value: 7},
 			{TimestampMs: 45_000, Value: 3},
-			{TimestampMs: 60_000, Value: 0},
 		},
 	},
 	{
@@ -794,7 +747,6 @@ var expectedCompareTs = []*tempopb.TimeSeries{
 			{TimestampMs: 15_000, Value: 8},
 			{TimestampMs: 30_000, Value: 7},
 			{TimestampMs: 45_000, Value: 3},
-			{TimestampMs: 60_000, Value: 0},
 		},
 	},
 	{
@@ -808,7 +760,6 @@ var expectedCompareTs = []*tempopb.TimeSeries{
 			{TimestampMs: 15_000, Value: 7},
 			{TimestampMs: 30_000, Value: 8},
 			{TimestampMs: 45_000, Value: 2},
-			{TimestampMs: 60_000, Value: 0},
 		},
 	},
 	{
@@ -822,7 +773,6 @@ var expectedCompareTs = []*tempopb.TimeSeries{
 			{TimestampMs: 15_000, Value: 7},
 			{TimestampMs: 30_000, Value: 8},
 			{TimestampMs: 45_000, Value: 2},
-			{TimestampMs: 60_000, Value: 0},
 		},
 	},
 }
