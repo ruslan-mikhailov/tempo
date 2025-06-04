@@ -181,11 +181,15 @@ func translateQueryRangeToInstant(input tempopb.QueryRangeResponse) tempopb.Quer
 		if len(series.Samples) == 0 {
 			continue
 		}
-		// Use first value
+		var totalValue float64
+		for _, sample := range series.Samples {
+			totalValue += sample.Value
+		}
+
 		output.Series = append(output.Series, &tempopb.InstantSeries{
 			Labels:     series.Labels,
 			PromLabels: series.PromLabels,
-			Value:      series.Samples[0].Value,
+			Value:      totalValue,
 		})
 	}
 	return output
