@@ -181,6 +181,12 @@ func translateQueryRangeToInstant(input tempopb.QueryRangeResponse) tempopb.Quer
 		if len(series.Samples) == 0 {
 			continue
 		}
+
+		// TODO: add warning or even panic?
+		if len(series.Samples) > 1 {
+			println("FINDME Oh no! Multiple samples!", len(series.Samples))
+		}
+
 		// Use first value
 		output.Series = append(output.Series, &tempopb.InstantSeries{
 			Labels:     series.Labels,
