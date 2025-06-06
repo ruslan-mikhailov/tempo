@@ -142,7 +142,11 @@ func TrimToAfter(req *tempopb.QueryRangeRequest, before time.Time) {
 }
 
 func IsInstant(req tempopb.QueryRangeRequest) bool {
-	return req.End-req.Start == req.Step
+	return isInstant(req.Start, req.End, req.Step)
+}
+
+func isInstant(start, end, step uint64) bool {
+	return end-start == step
 }
 
 // AlignRequest shifts the start and end times of the request to align with the step
@@ -164,7 +168,7 @@ func alignStart(start, end, step uint64) uint64 {
 	if step == 0 {
 		return 0
 	}
-	if end-start == step {
+	if isInstant(start, end, step) {
 		return start
 	}
 
@@ -176,7 +180,7 @@ func alignEnd(start, end, step uint64) uint64 {
 	if step == 0 {
 		return 0
 	}
-	if end-start == step {
+	if isInstant(start, end, step) {
 		return start
 	}
 
