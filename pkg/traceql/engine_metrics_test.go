@@ -609,6 +609,48 @@ func TestCountOverTime(t *testing.T) {
 	require.Equal(t, len(result), seriesCount)
 }
 
+func TestCountOverTimeInstantNs(t *testing.T) {
+	req := &tempopb.QueryRangeRequest{
+		Start: uint64(1*time.Second - 9*time.Nanosecond),
+		End:   uint64(3*time.Second + 9*time.Nanosecond),
+		Step:  uint64(2*time.Second + 18*time.Nanosecond), // for instant queries, step == end-start
+		Query: "{ } | count_over_time()",
+	}
+
+	in := []Span{
+		// outside of the range but within the range for ms. Should be ignored.
+		newMockSpan(nil).WithStartTime(uint64(1*time.Second - 20*time.Nanosecond)).WithDuration(1),
+
+		// within the range
+		newMockSpan(nil).WithStartTime(uint64(1*time.Second - 1*time.Nanosecond)).WithDuration(1),
+		newMockSpan(nil).WithStartTime(uint64(1 * time.Second)).WithDuration(256),
+		newMockSpan(nil).WithStartTime(uint64(1*time.Second + 1*time.Nanosecond)).WithDuration(1),
+
+		// within the range
+		newMockSpan(nil).WithStartTime(uint64(3*time.Second - 1*time.Nanosecond)).WithDuration(1),
+		newMockSpan(nil).WithStartTime(uint64(3 * time.Second)).WithDuration(512),
+		newMockSpan(nil).WithStartTime(uint64(3*time.Second + 1*time.Nanosecond)).WithDuration(1),
+
+		// outside of the range but within the range for ms. Should be ignored.
+		newMockSpan(nil).WithStartTime(uint64(3*time.Second + 20*time.Nanosecond)).WithDuration(1),
+	}
+
+	out := SeriesSet{
+		`{__name__="count_over_time"}`: TimeSeries{
+			Labels: []Label{
+				{Name: "__name__", Value: NewStaticString("count_over_time")},
+			},
+			Values:    []float64{6},
+			Exemplars: make([]Exemplar, 0),
+		},
+	}
+
+	result, seriesCount, err := runTraceQLMetric(req, in)
+	require.NoError(t, err)
+	require.Equal(t, out, result)
+	require.Equal(t, len(result), seriesCount)
+}
+
 func TestMinOverTimeForDuration(t *testing.T) {
 	req := &tempopb.QueryRangeRequest{
 		Start: uint64(1 * time.Second),
