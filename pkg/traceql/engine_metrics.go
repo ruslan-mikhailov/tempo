@@ -1466,12 +1466,14 @@ func (i *IntervalCheckerQueryRange) interval(ts, start, end, step uint64) int {
 	return int(interval)
 }
 
+// TODO: do we need to have a struct for MS operations only?
 func (i *IntervalCheckerQueryRange) IntervalMs(tsmill int64) int {
 	ts := uint64(time.Duration(tsmill) * time.Millisecond)
 	if !isTsValidForInterval(ts, i.startMs, i.endMs, i.step) {
 		return -1
 	}
 
+	// TODO: why step is not rounded to milliseconds? Possible bug
 	return i.interval(ts, i.startMs, i.endMs, i.step)
 }
 
