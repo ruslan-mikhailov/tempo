@@ -1355,6 +1355,90 @@ func NewSimpleCombiner(req *tempopb.QueryRangeRequest, op SimpleAggregationOp, e
 	}
 }
 
+type collectorInterface interface {
+	Collect(sample tempopb.Sample) bool
+	SetLabels(labels Labels)
+	SetExemplars(exemplars []Exemplar)
+	TimeSeries() TimeSeries
+}
+
+type collectorInstant struct {
+	start, end  uint64
+	ts          TimeSeries
+	processFunc func(value, in float64)
+}
+
+func (c *collectorInstant) Collect(sample tempopb.Sample) bool {
+	if false { // TODO: add validation for sample timestamp in Ms: start <= ts <= end
+		return false
+	}
+
+	c.processFunc(c.ts.Values[0], sample.Value)
+	return true
+}
+
+func (c *collectorRenameMe) SetLabels(labels Labels) {
+	c.ts.Labels = labels
+}
+
+func (c *collectorRenameMe) SetExemplars(exemplars []Exemplar) {
+	c.ts.Exemplars = exemplars
+}
+
+func (c *collectorRenameMe) TimeSeries() TimeSeries {
+	return c.ts
+}
+
+// TODO: move somethere
+type collectorRenameMe struct {
+	start, end, step uint64
+	// exemplarBuckets  *bucketSet
+	ts TimeSeries // TODO: maybe just []float64?
+	// NOTE: Does not work for histograms and avg :(
+	// Need to write for it its own collector
+	processFunc func(value, in float64)
+}
+
+func (c *collectorRenameMe) Collect(sample tempopb.Sample) bool {
+	i := IntervalOfMs(sample.TimestampMs, c.start, c.end, c.step)
+	if i < 0 && i >= len(c.ts.Values) {
+		return false
+	}
+
+	// c.ts.Values[i] = b.aggregationFunc(existing.Values[i], sample.Value)
+	c.processFunc(c.ts.Values[i], sample.Value)
+	return true
+}
+
+func (c *collectorRenameMe) SetLabels(labels Labels) {
+	c.ts.Labels = labels
+}
+
+func (c *collectorRenameMe) SetExemplars(exemplars []Exemplar) {
+	c.ts.Exemplars = exemplars
+}
+
+func (c *collectorRenameMe) TimeSeries() TimeSeries {
+	return c.ts
+}
+
+// TODO: Rename!
+func NewCollectorRenameMe(req *tempopb.QueryRangeRequest, processFunc func(values []float64, value float64)) *collectorRenameMe {
+	l := IntervalCount(req.Start, req.End, req.Step)
+	ts := TimeSeries{
+		Labels:    nil,
+		Values:    make([]float64, l),
+		Exemplars: nil,
+	}
+	return &collectorRenameMe{
+		start:       req.Start,
+		end:         req.End,
+		step:        req.Step,
+		ts:          ts,
+		processFunc: processFunc,
+	}
+}
+
 func (b *SimpleAggregator) Combine(in []*tempopb.TimeSeries) {
 	nan := math.Float64frombits(normalNaN)
 
