@@ -54,14 +54,16 @@ func TestStepRangeToIntervals(t *testing.T) {
 	}
 
 	for _, c := range tc {
-		require.Equal(t, c.expected, IntervalCount(c.start, c.end, c.step))
+		checker := NewIntervalChecker(c.start, c.end, c.step)
+		require.Equal(t, c.expected, checker.IntervalCount())
 	}
 }
 
 func TestTimestampOf(t *testing.T) {
 	tc := []struct {
-		interval, start, end, step uint64
-		expected                   uint64
+		interval         int
+		start, end, step uint64
+		expected         uint64
 	}{
 		{
 			expected: 0,
@@ -76,7 +78,8 @@ func TestTimestampOf(t *testing.T) {
 	}
 
 	for _, c := range tc {
-		require.Equal(t, c.expected, TimestampOf(c.interval, c.start, c.end, c.step))
+		checker := NewIntervalChecker(c.start, c.end, c.step)
+		require.Equal(t, c.expected, checker.TimestampOf(c.interval))
 	}
 }
 
@@ -100,7 +103,8 @@ func TestIntervalOf(t *testing.T) {
 	}
 
 	for _, c := range tc {
-		require.Equal(t, c.expected, IntervalOf(c.ts, c.start, c.end, c.step))
+		checker := NewIntervalChecker(c.start, c.end, c.step)
+		require.Equal(t, c.expected, checker.Interval(c.ts))
 	}
 }
 

@@ -50,64 +50,9 @@ func DefaultQueryRangeStep(start, end uint64) uint64 {
 	return uint64(interval.Nanoseconds())
 }
 
-// IntervalCount is the number of intervals in the range with step.
-func IntervalCount(start, end, step uint64) int {
-	if isInstant(start, end, step) { // always 1 interval
-		return 1
-	}
-	start = alignStart(start, end, step)
-	end = alignEnd(start, end, step)
-
-	intervals := (end - start) / step
-	intervals++
-	return int(intervals)
-}
-
-// TimestampOf the given interval with the start and step.
-func TimestampOf(interval, start, end, step uint64) uint64 {
-	start = alignStart(start, end, step)
-	return start + interval*step
-}
-
-// IntervalOf the given timestamp within the range and step.
-func IntervalOf(ts, start, end, step uint64) int {
-	if isInstant(start, end, step) { // always one interval
-		if !isTsValidForInterval(ts, start, end, step) {
-			return -1
-		}
-		return 0
-	}
-
-	start = alignStart(start, end, step)
-	end = alignEnd(start, end, step) + step
-
-	if !isTsValidForInterval(ts, start, end, step) {
-		return -1
-	}
-
-	return int((ts - start) / step)
-}
-
 // validateIntervalOf returns true if the timestamp is valid for the given range and step.
 func isTsValidForInterval(ts, start, end, step uint64) bool {
 	return ts >= start && ts <= end && end != start && step != 0
-}
-
-// IntervalOfMs is the same as IntervalOf except the input and calculations are in unix milliseconds.
-// TODO: I need to remove this function and make it part of Checker
-func IntervalOfMs(tsmills int64, start, end, step uint64) int {
-	ts := uint64(time.Duration(tsmills) * time.Millisecond)
-	instant := isInstant(start, end, step)
-	start -= start % uint64(time.Millisecond)
-	end -= end % uint64(time.Millisecond)
-
-	if instant {
-		if !isTsValidForInterval(ts, start, end, step) {
-			return -1
-		}
-		return 0
-	}
-	return IntervalOf(ts, start, end, step)
 }
 
 // TrimToBlockOverlap returns the aligned overlap between the given time and block ranges,
@@ -1448,9 +1393,12 @@ func (h *Histogram) Record(bucket float64, count int) {
 }
 
 type IntervalChecker interface {
+	// Interval the given timestamp within the range and step.
 	Interval(ts uint64) int
+	// IntervalMs is the same as Bucket except the input and calculations are in unix milliseconds.
 	IntervalMs(ts int64) int
 	TimestampOf(interval int) uint64
+	// IntervalCount is the number of intervals in the range with step.
 	IntervalCount() int
 }
 
@@ -1462,6 +1410,8 @@ func NewIntervalChecker(start, end, step uint64) IntervalChecker {
 	if isInstant(start, end, step) {
 		return &IntervalCheckerInstant{
 			start: start,
+			end:   end,
+			step:  end - start,
 		}
 	}
 	return &IntervalCheckerQueryRange{
@@ -1479,30 +1429,56 @@ type IntervalCheckerQueryRange struct {
 }
 
 func (i *IntervalCheckerQueryRange) Interval(ts uint64) int {
-	return IntervalOf(ts, i.start, i.end, i.step)
+	start := alignStart(i.start, i.end, i.step)
+	end := alignEnd(i.start, i.end, i.step) + i.step
+
+	if !isTsValidForInterval(ts, start, end, i.step) {
+		return -1
+	}
+
+	return int((ts - start) / i.step)
 }
 
-func (i *IntervalCheckerQueryRange) IntervalMs(ts int64) int {
-	return IntervalOfMs(ts, i.start, i.end, i.step)
+func (i *IntervalCheckerQueryRange) IntervalMs(tsmill int64) int {
+	ts := uint64(time.Duration(tsmill) * time.Millisecond)
+	// TODO: it is not correct to change the values and is fixed in the next commit
+	i.start -= i.start % uint64(time.Millisecond)
+	i.end -= i.end % uint64(time.Millisecond)
+	return i.Interval(ts)
 }
 
 func (i *IntervalCheckerQueryRange) TimestampOf(interval int) uint64 {
-	return TimestampOf(uint64(interval), i.start, i.end, i.step)
+	start := alignStart(i.start, i.end, i.step)
+	return start + uint64(interval)*i.step
 }
 
 func (i *IntervalCheckerQueryRange) IntervalCount() int {
-	return IntervalCount(i.start, i.end, i.step)
+	start := alignStart(i.start, i.end, i.step)
+	end := alignEnd(i.start, i.end, i.step)
+
+	intervals := (end - start) / i.step
+	intervals++
+	return int(intervals)
+
 }
 
 type IntervalCheckerInstant struct {
-	start uint64
+	start, end, step uint64
 }
 
 func (i *IntervalCheckerInstant) Interval(ts uint64) int {
+	if !isTsValidForInterval(ts, i.start, i.end, i.step) {
+		return -1
+	}
 	return 0 // Instant queries only have one bucket
 }
 
-func (i *IntervalCheckerInstant) IntervalMs(ts int64) int {
+func (i *IntervalCheckerInstant) IntervalMs(tsmill int64) int {
+	ts := uint64(time.Duration(tsmill) * time.Millisecond)
+	if !isTsValidForInterval(ts, i.start, i.end, i.step) {
+		return -1
+	}
+
 	return 0 // Instant queries only have one bucket
 }
 
