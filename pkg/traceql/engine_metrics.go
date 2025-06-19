@@ -1309,16 +1309,14 @@ const (
 )
 
 type SimpleAggregator struct {
-	ss               SeriesSet
+	ss               map[string]collectorInterface
 	exemplarBuckets  *bucketSet
-	len              int
 	aggregationFunc  func(existingValue float64, newValue float64) float64
 	start, end, step uint64
 	initWithNaN      bool
 }
 
 func NewSimpleCombiner(req *tempopb.QueryRangeRequest, op SimpleAggregationOp, exemplars uint32) *SimpleAggregator {
-	l := IntervalCount(req.Start, req.End, req.Step)
 	var initWithNaN bool
 	var f func(existingValue float64, newValue float64) float64
 	switch op {
@@ -1340,13 +1338,12 @@ func NewSimpleCombiner(req *tempopb.QueryRangeRequest, op SimpleAggregationOp, e
 
 	}
 	return &SimpleAggregator{
-		ss: make(SeriesSet),
+		ss: make(map[string]collectorInterface),
 		exemplarBuckets: newBucketSet(
 			exemplars,
 			alignStart(req.Start, req.End, req.Step),
 			alignEnd(req.Start, req.End, req.Step),
 		),
-		len:             l,
 		start:           req.Start,
 		end:             req.End,
 		step:            req.Step,
@@ -1355,6 +1352,8 @@ func NewSimpleCombiner(req *tempopb.QueryRangeRequest, op SimpleAggregationOp, e
 	}
 }
 
+// TODO: Rename everything here!
+
 type collectorInterface interface {
 	Collect(sample tempopb.Sample) bool
 	SetLabels(labels Labels)
@@ -1362,10 +1361,30 @@ type collectorInterface interface {
 	TimeSeries() TimeSeries
 }
 
+func NewCollector(req *tempopb.QueryRangeRequest, processFunc func(value, in float64) float64) collectorInterface {
+	if IsInstant(*req) {
+		return NewCollectorInstant(req, processFunc)
+	}
+	return NewCollectorRenameMe(req, processFunc)
+}
+
 type collectorInstant struct {
 	start, end  uint64
 	ts          TimeSeries
-	processFunc func(value, in float64)
+	processFunc func(value, in float64) float64
+}
+
+func NewCollectorInstant(req *tempopb.QueryRangeRequest, processFunc func(value, in float64) float64) *collectorInstant {
+	return &collectorInstant{
+		start: req.Start,
+		end:   req.End,
+		ts: TimeSeries{
+			Labels:    nil,
+			Values:    make([]float64, 1), // Instant query has only one value
+			Exemplars: nil,
+		},
+		processFunc: processFunc,
+	}
 }
 
 func (c *collectorInstant) Collect(sample tempopb.Sample) bool {
@@ -1373,19 +1392,19 @@ func (c *collectorInstant) Collect(sample tempopb.Sample) bool {
 		return false
 	}
 
-	c.processFunc(c.ts.Values[0], sample.Value)
+	c.ts.Values[0] = c.processFunc(c.ts.Values[0], sample.Value)
 	return true
 }
 
-func (c *collectorRenameMe) SetLabels(labels Labels) {
+func (c *collectorInstant) SetLabels(labels Labels) {
 	c.ts.Labels = labels
 }
 
-func (c *collectorRenameMe) SetExemplars(exemplars []Exemplar) {
+func (c *collectorInstant) SetExemplars(exemplars []Exemplar) {
 	c.ts.Exemplars = exemplars
 }
 
-func (c *collectorRenameMe) TimeSeries() TimeSeries {
+func (c *collectorInstant) TimeSeries() TimeSeries {
 	return c.ts
 }
 
@@ -1396,7 +1415,7 @@ type collectorRenameMe struct {
 	ts TimeSeries // TODO: maybe just []float64?
 	// NOTE: Does not work for histograms and avg :(
 	// Need to write for it its own collector
-	processFunc func(value, in float64)
+	processFunc func(value, in float64) float64
 }
 
 func (c *collectorRenameMe) Collect(sample tempopb.Sample) bool {
@@ -1406,7 +1425,7 @@ func (c *collectorRenameMe) Collect(sample tempopb.Sample) bool {
 	}
 
 	// c.ts.Values[i] = b.aggregationFunc(existing.Values[i], sample.Value)
-	c.processFunc(c.ts.Values[i], sample.Value)
+	c.ts.Values[i] = c.processFunc(c.ts.Values[i], sample.Value)
 	return true
 }
 
@@ -1422,8 +1441,10 @@ func (c *collectorRenameMe) TimeSeries() TimeSeries {
 	return c.ts
 }
 
-// TODO: Rename!
-func NewCollectorRenameMe(req *tempopb.QueryRangeRequest, processFunc func(values []float64, value float64)) *collectorRenameMe {
+func NewCollectorRenameMe(
+	req *tempopb.QueryRangeRequest,
+	processFunc func(values float64, value float64) float64,
+) *collectorRenameMe {
 	l := IntervalCount(req.Start, req.End, req.Step)
 	ts := TimeSeries{
 		Labels:    nil,
