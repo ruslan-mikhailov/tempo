@@ -1407,63 +1407,62 @@ func NewIntervalCheckerFromReq(req *tempopb.QueryRangeRequest) IntervalChecker {
 }
 
 func NewIntervalChecker(start, end, step uint64) IntervalChecker {
+	startMs := start - start%uint64(time.Millisecond)
+	endMs := end - end%uint64(time.Millisecond)
 	if isInstant(start, end, step) {
 		return &IntervalCheckerInstant{
-			start: start,
-			end:   end,
-			step:  end - start,
+			start:   start,
+			end:     end,
+			step:    end - start,
+			startMs: startMs,
+			endMs:   endMs,
 		}
 	}
 	return &IntervalCheckerQueryRange{
-		start: start,
-		end:   end,
-		// TODO: we can align in advance to save CPU cycles later
-		// start: alignStart(req.Start, req.End, req.Step),
-		// end:   alignEnd(req.Start, req.End, req.Step),
-		step: step,
+		start: alignStart(start, end, step),
+		end:   alignEnd(start, end, step),
+		step:  step,
+		// rounded to milliseconds
+		startMs: alignStart(startMs, endMs, step),
+		endMs:   alignEnd(startMs, endMs, step),
 	}
 }
 
 type IntervalCheckerQueryRange struct {
 	start, end, step uint64
+	startMs, endMs   uint64
 }
 
 func (i *IntervalCheckerQueryRange) Interval(ts uint64) int {
-	start := alignStart(i.start, i.end, i.step)
-	end := alignEnd(i.start, i.end, i.step) + i.step
-
-	if !isTsValidForInterval(ts, start, end, i.step) {
+	if !isTsValidForInterval(ts, i.start, i.end, i.step) {
 		return -1
 	}
 
-	return int((ts - start) / i.step)
+	return int((ts - i.start) / i.step)
 }
 
 func (i *IntervalCheckerQueryRange) IntervalMs(tsmill int64) int {
 	ts := uint64(time.Duration(tsmill) * time.Millisecond)
-	// TODO: it is not correct to change the values and is fixed in the next commit
-	i.start -= i.start % uint64(time.Millisecond)
-	i.end -= i.end % uint64(time.Millisecond)
-	return i.Interval(ts)
+	if !isTsValidForInterval(ts, i.startMs, i.endMs, i.step) {
+		return -1
+	}
+
+	return int((ts - i.startMs) / i.step)
 }
 
 func (i *IntervalCheckerQueryRange) TimestampOf(interval int) uint64 {
-	start := alignStart(i.start, i.end, i.step)
-	return start + uint64(interval)*i.step
+	return i.start + uint64(interval)*i.step
 }
 
 func (i *IntervalCheckerQueryRange) IntervalCount() int {
-	start := alignStart(i.start, i.end, i.step)
-	end := alignEnd(i.start, i.end, i.step)
-
-	intervals := (end - start) / i.step
+	intervals := (i.end - i.start) / i.step
 	intervals++
 	return int(intervals)
-
 }
 
 type IntervalCheckerInstant struct {
 	start, end, step uint64
+	startMs, endMs   uint64
 }
 
 func (i *IntervalCheckerInstant) Interval(ts uint64) int {
@@ -1475,7 +1474,7 @@ func (i *IntervalCheckerInstant) Interval(ts uint64) int {
 
 func (i *IntervalCheckerInstant) IntervalMs(tsmill int64) int {
 	ts := uint64(time.Duration(tsmill) * time.Millisecond)
-	if !isTsValidForInterval(ts, i.start, i.end, i.step) {
+	if !isTsValidForInterval(ts, i.startMs, i.endMs, i.step) {
 		return -1
 	}
 
