@@ -1359,13 +1359,14 @@ type collectorInterface interface {
 	SetLabels(labels Labels)
 	SetExemplars(exemplars []Exemplar)
 	TimeSeries() TimeSeries
+	AppendExemplars(exemplar Exemplar)
 }
 
-func NewCollector(req *tempopb.QueryRangeRequest, processFunc func(value, in float64) float64) collectorInterface {
-	if IsInstant(*req) {
-		return NewCollectorInstant(req, processFunc)
+func NewCollector(start, end, step uint64, processFunc func(value, in float64) float64) collectorInterface {
+	if isInstant(start, end, step) {
+		return NewCollectorInstant(start, end, processFunc)
 	}
-	return NewCollectorRenameMe(req, processFunc)
+	return NewCollectorRenameMe(start, end, step, processFunc)
 }
 
 type collectorInstant struct {
@@ -1374,10 +1375,10 @@ type collectorInstant struct {
 	processFunc func(value, in float64) float64
 }
 
-func NewCollectorInstant(req *tempopb.QueryRangeRequest, processFunc func(value, in float64) float64) *collectorInstant {
+func NewCollectorInstant(start, end uint64, processFunc func(value, in float64) float64) *collectorInstant {
 	return &collectorInstant{
-		start: req.Start,
-		end:   req.End,
+		start: start,
+		end:   end,
 		ts: TimeSeries{
 			Labels:    nil,
 			Values:    make([]float64, 1), // Instant query has only one value
@@ -1406,6 +1407,10 @@ func (c *collectorInstant) SetExemplars(exemplars []Exemplar) {
 
 func (c *collectorInstant) TimeSeries() TimeSeries {
 	return c.ts
+}
+
+func (c *collectorInstant) AppendExemplars(exemplar Exemplar) {
+	c.ts.Exemplars = append(c.ts.Exemplars, exemplar)
 }
 
 // TODO: move somethere
@@ -1437,31 +1442,35 @@ func (c *collectorRenameMe) SetExemplars(exemplars []Exemplar) {
 	c.ts.Exemplars = exemplars
 }
 
+func (c *collectorRenameMe) AppendExemplars(exemplar Exemplar) {
+	c.ts.Exemplars = append(c.ts.Exemplars, exemplar)
+}
+
 func (c *collectorRenameMe) TimeSeries() TimeSeries {
 	return c.ts
 }
 
 func NewCollectorRenameMe(
-	req *tempopb.QueryRangeRequest,
+	start, end, step uint64,
 	processFunc func(values float64, value float64) float64,
 ) *collectorRenameMe {
-	l := IntervalCount(req.Start, req.End, req.Step)
+	l := IntervalCount(start, end, step)
 	ts := TimeSeries{
 		Labels:    nil,
 		Values:    make([]float64, l),
 		Exemplars: nil,
 	}
 	return &collectorRenameMe{
-		start:       req.Start,
-		end:         req.End,
-		step:        req.Step,
+		start:       start,
+		end:         end,
+		step:        step,
 		ts:          ts,
 		processFunc: processFunc,
 	}
 }
 
 func (b *SimpleAggregator) Combine(in []*tempopb.TimeSeries) {
-	nan := math.Float64frombits(normalNaN)
+	// nan := math.Float64frombits(normalNaN)
 
 	for _, ts := range in {
 		existing, ok := b.ss[ts.PromLabels]
@@ -1475,34 +1484,31 @@ func (b *SimpleAggregator) Combine(in []*tempopb.TimeSeries) {
 				})
 			}
 
-			existing = TimeSeries{
-				Labels:    labels,
-				Values:    make([]float64, b.len),
-				Exemplars: make([]Exemplar, 0, len(ts.Exemplars)),
-			}
-			if b.initWithNaN {
-				for i := range existing.Values {
-					existing.Values[i] = nan
-				}
-			}
+			existing = NewCollector(b.start, b.end, b.step, func(value, in float64) float64 {
+				return b.aggregationFunc(value, in)
+			})
+			existing.SetLabels(labels)
+			existing.SetExemplars(make([]Exemplar, 0, len(ts.Exemplars))) // preallocate
+			// if b.initWithNaN { // TODO: add some function for that or pass in New* func I guess
+			// 	for i := range existing.Values {
+			// 		existing.Values[i] = nan
+			// 	}
+			// }
 
 			b.ss[ts.PromLabels] = existing
 		}
 
 		for _, sample := range ts.Samples {
-			j := IntervalOfMs(sample.TimestampMs, b.start, b.end, b.step)
-			if j >= 0 && j < len(existing.Values) {
-				existing.Values[j] = b.aggregationFunc(existing.Values[j], sample.Value)
-			}
+			existing.Collect(sample)
 		}
 
-		b.aggregateExemplars(ts, &existing)
+		b.aggregateExemplars(ts, existing)
 
 		b.ss[ts.PromLabels] = existing
 	}
 }
 
-func (b *SimpleAggregator) aggregateExemplars(ts *tempopb.TimeSeries, existing *TimeSeries) {
+func (b *SimpleAggregator) aggregateExemplars(ts *tempopb.TimeSeries, existing collectorInterface) {
 	for _, exemplar := range ts.Exemplars {
 		if b.exemplarBuckets.testTotal() {
 			break
@@ -1517,7 +1523,8 @@ func (b *SimpleAggregator) aggregateExemplars(ts *tempopb.TimeSeries, existing *
 				Value: StaticFromAnyValue(l.Value),
 			})
 		}
-		existing.Exemplars = append(existing.Exemplars, Exemplar{
+
+		existing.AppendExemplars(Exemplar{
 			Labels:      labels,
 			Value:       exemplar.Value,
 			TimestampMs: uint64(exemplar.TimestampMs),
@@ -1526,7 +1533,11 @@ func (b *SimpleAggregator) aggregateExemplars(ts *tempopb.TimeSeries, existing *
 }
 
 func (b *SimpleAggregator) Results() SeriesSet {
-	return b.ss
+	ss := make(SeriesSet, len(b.ss))
+	for key, val := range b.ss {
+		ss[key] = val.TimeSeries()
+	}
+	return ss
 }
 
 func (b *SimpleAggregator) Length() int {
