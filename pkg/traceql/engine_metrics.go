@@ -1522,6 +1522,7 @@ func (h *HistogramAggregator) Combine(in []*tempopb.TimeSeries) {
 			if sample.Value == 0 {
 				continue
 			}
+			// TODO: Add here some abstraction to use this place for both instant and range queries.
 			j := IntervalOfMs(sample.TimestampMs, h.start, h.end, h.step)
 			if j >= 0 && j < len(existing.hist) {
 				existing.hist[j].Record(b, int(sample.Value))
