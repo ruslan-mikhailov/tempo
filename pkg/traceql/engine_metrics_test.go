@@ -655,6 +655,40 @@ func TestCountOverTimeInstantNs(t *testing.T) {
 	require.Equal(t, len(result), seriesCount)
 }
 
+func TestRateInstant(t *testing.T) {
+	// not rounded values to simulate real world data
+	start := 1 * time.Second
+	end := 10 * time.Second
+	durationInSeconds := 9.
+	step := end - start // for instant queries step == end-start
+	req := &tempopb.QueryRangeRequest{
+		Start: uint64(start),
+		End:   uint64(end),
+		Step:  uint64(step),
+		Query: "{ } | rate()",
+	}
+
+	in := make([]Span, 0)
+	in = append(in, generateSpans(2, []int{2, 3, 4, 5, 6, 7, 8}, "bar")...)
+	in = append(in, generateSpans(20, []int{3, 4, 8}, "bar")...)
+
+	var totalCount float64 = (7 * 2) + (3 * 20)
+	out := SeriesSet{
+		`{__name__="rate"}`: TimeSeries{
+			Labels: []Label{
+				{Name: "__name__", Value: NewStaticString("rate")},
+			},
+			Values:    []float64{totalCount / durationInSeconds},
+			Exemplars: make([]Exemplar, 0),
+		},
+	}
+
+	result, seriesCount, err := runTraceQLMetric(req, in)
+	require.NoError(t, err)
+	require.Equal(t, out, result)
+	require.Equal(t, len(result), seriesCount)
+}
+
 // TestCountOverTimeInstantNsWithCutoff simulates merge behavior in L2 and L3.
 func TestCountOverTimeInstantNsWithCutoff(t *testing.T) {
 	start := 1*time.Second + 300*time.Nanosecond // additional 300ns that can be accidentally dropped by ms conversion
