@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime/debug"
 	"sort"
 	"sync"
 	"time"
@@ -349,6 +350,15 @@ func (set SeriesSet) ToProto(req *tempopb.QueryRangeRequest) []*tempopb.TimeSeri
 		resp = append(resp, ss)
 	}
 
+	if len(resp) == 0 {
+		return resp
+	}
+	fmt.Println("--------------------")
+	debug.PrintStack()
+	for _, ts := range resp {
+		fmt.Printf("FINDME samples = %+v\n", ts.Samples)
+	}
+	fmt.Println("++++++++++++++++++++")
 	return resp
 }
 
