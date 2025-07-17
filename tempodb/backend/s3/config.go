@@ -101,6 +101,16 @@ func (cfg *Config) Validate() error {
 	if !slices.Contains(supportedChecksumTypes, cfg.ChecksumType) {
 		return fmt.Errorf("invalid checksum type %s, supported values: %s", cfg.ChecksumType, strings.Join(supportedChecksumTypes, ", "))
 	}
+
+	switch cfg.SSE.Type {
+	case "", SSES3:
+	case SSEKMS:
+		if cfg.SSE.KMSKeyID == "" {
+			return errors.New("KMSKeyID is missing")
+		}
+	default:
+		return errUnsupportedSSEType
+	}
 	return nil
 }
 

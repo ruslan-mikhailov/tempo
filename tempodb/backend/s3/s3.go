@@ -733,20 +733,16 @@ func buildSSEConfig(cfg *Config) (encrypt.ServerSide, error) {
 	case "":
 		return nil, nil
 	case SSEKMS:
-		if cfg.SSE.KMSKeyID == "" {
-			return nil, errors.New("KMSKeyID is missing")
-		} else {
-			encryptionCtx, err := parseKMSEncryptionContext(cfg.SSE.KMSEncryptionContext)
-			if err != nil {
-				return nil, err
-			}
-			if encryptionCtx == nil {
-				// To overcome a limitation in Minio which checks interface{} == nil.
-
-				return encrypt.NewSSEKMS(cfg.SSE.KMSKeyID, nil)
-			}
-			return encrypt.NewSSEKMS(cfg.SSE.KMSKeyID, encryptionCtx)
+		encryptionCtx, err := parseKMSEncryptionContext(cfg.SSE.KMSEncryptionContext)
+		if err != nil {
+			return nil, err
 		}
+		if encryptionCtx == nil {
+			// To overcome a limitation in Minio which checks interface{} == nil.
+
+			return encrypt.NewSSEKMS(cfg.SSE.KMSKeyID, nil)
+		}
+		return encrypt.NewSSEKMS(cfg.SSE.KMSKeyID, encryptionCtx)
 	case SSES3:
 		return encrypt.NewSSE(), nil
 	default:
