@@ -71,6 +71,9 @@ func (m *mockWriter) CompleteBlockWithBackend(context.Context, common.WALBlock, 
 	return nil, nil
 }
 
+func (m *mockWriter) AllowCompaction(ctx context.Context, w tempodb.Writer) error {
+	return nil
+}
 func (m *mockWriter) WAL() *wal.WAL { return nil }
 
 func TestProcessorDoesNotRace(t *testing.T) {
