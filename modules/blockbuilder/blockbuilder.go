@@ -456,6 +456,8 @@ outer:
 		return time.Time{}, -1, err
 	}
 
+	writer.allowCompaction(ctx, b.writer)
+
 	level.Info(b.logger).Log(
 		"msg", "successfully committed offset to kafka",
 		"partition", ps.partition,
