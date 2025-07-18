@@ -887,7 +887,11 @@ func TestNoCompactFlag(t *testing.T) {
 	rw := r.(*readerWriter)
 	hasFlag, err := rw.r.HasNoCompactFlag(ctx, (uuid.UUID)(completedBlockID), testTenantID)
 	require.NoError(t, err)
-	assert.False(t, hasFlag, "nocompact flag should be removed after block completion")
+	assert.True(t, hasFlag, "nocompact flag should remain after successful writeBlockMeta")
+
+	// Remove the nocompact flag
+	err = rw.w.DeleteNoCompactFlag(ctx, (uuid.UUID)(completedBlockID), testTenantID)
+	require.NoError(t, err)
 
 	// Poll to update the blocklist
 	rw.pollBlocklist(ctx)

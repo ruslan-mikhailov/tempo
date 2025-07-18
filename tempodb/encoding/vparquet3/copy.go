@@ -105,11 +105,5 @@ func writeBlockMeta(ctx context.Context, w backend.Writer, meta *backend.BlockMe
 		return fmt.Errorf("unexpected error writing meta: %w", err)
 	}
 
-	// Remove nocompact flag - block is now complete and can be compacted
-	err = w.DeleteNoCompactFlag(ctx, (uuid.UUID)(meta.BlockID), meta.TenantID)
-	if err != nil {
-		return fmt.Errorf("unexpected error removing nocompact flag: %w", err)
-	}
-
 	return nil
 }

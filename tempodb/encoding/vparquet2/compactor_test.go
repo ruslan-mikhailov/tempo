@@ -229,7 +229,7 @@ func TestWriteBlockMetaWithNoCompactFlag(t *testing.T) {
 	// Verify nocompact flag was removed after successful write
 	hasFlag, err := reader.HasNoCompactFlag(ctx, (uuid.UUID)(meta.BlockID), meta.TenantID)
 	require.NoError(t, err)
-	assert.False(t, hasFlag, "nocompact flag should be removed after successful writeBlockMeta")
+	assert.True(t, hasFlag, "nocompact flag should remain after successful writeBlockMeta")
 
 	// Verify meta.json was written
 	blockMeta, err := reader.BlockMeta(ctx, (uuid.UUID)(meta.BlockID), meta.TenantID)
