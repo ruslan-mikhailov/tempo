@@ -59,6 +59,24 @@ storage:
       version: vParquet3
     blocklist_poll: 1s
 
+# Add backend scheduler and worker configurations for compaction
+backend_scheduler:
+  provider:
+    compaction:
+      min_cycle_interval: 50ms
+      measure_interval: 1s
+
+backend_worker:
+  backend_scheduler_addr: tempo_e2e-backend-scheduler:9095
+
+backend_scheduler_client:
+  grpc_client_config:
+    max_send_msg_size: 134217728
+
+memberlist:
+  abort_if_cluster_join_fails: false
+  bind_port: 7946
+  join_members: []
 
 overrides:
   user_configurable_overrides:
