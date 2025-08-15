@@ -429,6 +429,7 @@ func ParseQueryRangeRequest(r *http.Request) (*tempopb.QueryRangeRequest, error)
 	if maxSeries, err := strconv.Atoi(maxSeries); err == nil {
 		req.MaxSeries = uint32(maxSeries)
 	}
+	req.OriginStep = req.Step
 
 	return req, nil
 }

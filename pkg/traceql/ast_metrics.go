@@ -123,7 +123,7 @@ func (a *MetricsAggregate) init(q *tempopb.QueryRangeRequest, mode AggregateMode
 		a.exemplarFn = exemplarFnFor(a.attr)
 
 	case metricsAggregateRate:
-		innerAgg = func() VectorAggregator { return NewRateAggregator(1.0 / time.Duration(q.Step).Seconds()) }
+		innerAgg = func() VectorAggregator { return NewRateAggregator(1.0 / time.Duration(q.OriginStep).Seconds()) }
 		a.simpleAggregationOp = sumAggregation
 		a.exemplarFn = exemplarNaN
 
