@@ -162,10 +162,16 @@ func TestLiveStorePartitionDownscale(t *testing.T) {
 	require.NoError(t, s.StartAndWaitReady(kafka))
 
 	// Start live-store instances
-	liveStore0 := util.NewTempoLiveStore(0)
-	liveStore1 := util.NewTempoLiveStore(1)
-	require.NoError(t, s.StartAndWaitReady(liveStore0, liveStore1))
-	waitUntilJoinedToPartitionRing(t, liveStore0, 2) // wait for both to join
+	liveStoreZoneA0 := util.NewNamedTempoLiveStore("live-store-zone-a", 0)
+	liveStoreZoneA1 := util.NewNamedTempoLiveStore("live-store-zone-a", 1)
+	liveStoreZoneB0 := util.NewNamedTempoLiveStore("live-store-zone-b", 0)
+	liveStoreZoneB1 := util.NewNamedTempoLiveStore("live-store-zone-b", 1)
+	require.NoError(t, s.StartAndWaitReady(
+		liveStoreZoneA0, liveStoreZoneA1,
+		liveStoreZoneB0, liveStoreZoneB1,
+	))
+	waitUntilJoinedToPartitionRing(t, liveStoreZoneA0, 2)
+	waitUntilJoinedToPartitionRing(t, liveStoreZoneB0, 2)
 
 	// Start other Tempo components
 	distributor := util.NewTempoDistributor()
@@ -194,13 +200,13 @@ func TestLiveStorePartitionDownscale(t *testing.T) {
 	// We will shutdown this instance later
 	var liveStoreInactive, liveStoreActive *e2e.HTTPService
 
-	ls := waitForTraceInLiveStore(t, 1, liveStore0, liveStore1)
-	if ls == liveStore0 {
-		liveStoreInactive = liveStore0
-		liveStoreActive = liveStore1
+	ls := waitForTraceInLiveStore(t, 1, liveStoreZoneA0, liveStoreZoneA1)
+	if ls == liveStoreZoneA0 {
+		liveStoreInactive = liveStoreZoneA0
+		liveStoreActive = liveStoreZoneA1
 	} else {
-		liveStoreInactive = liveStore1
-		liveStoreActive = liveStore0
+		liveStoreInactive = liveStoreZoneA1
+		liveStoreActive = liveStoreZoneA0
 	}
 
 	apiClient := httpclient.New("http://"+queryFrontend.Endpoint(3200), "")
