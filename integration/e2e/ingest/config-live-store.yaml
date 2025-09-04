@@ -47,8 +47,10 @@ memberlist:
   abort_if_cluster_join_fails: false
   bind_port: 7946
   join_members:
-    - live-store-0:7946
-    - live-store-1:7946
+    - live-store-zone-a-0:7946
+    - live-store-zone-a-1:7946
+    - live-store-zone-b-0:7946
+    - live-store-zone-b-1:7946
 
 overrides:
   user_configurable_overrides:

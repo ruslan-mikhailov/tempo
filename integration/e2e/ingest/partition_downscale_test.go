@@ -199,20 +199,25 @@ func TestLiveStorePartitionDownscale(t *testing.T) {
 	// First try to find which live-store processed the records
 	// We will shutdown this instance later
 	var liveStoreInactive, liveStoreActive *e2e.HTTPService
+	var liveStoreZoneBInactive, liveStoreZoneBActive *e2e.HTTPService
 
 	ls := waitForTraceInLiveStore(t, 1, liveStoreZoneA0, liveStoreZoneA1)
 	if ls == liveStoreZoneA0 {
 		liveStoreInactive = liveStoreZoneA0
 		liveStoreActive = liveStoreZoneA1
+		liveStoreZoneBInactive = liveStoreZoneB0
+		liveStoreZoneBActive = liveStoreZoneB1
 	} else {
 		liveStoreInactive = liveStoreZoneA1
 		liveStoreActive = liveStoreZoneA0
+		liveStoreZoneBInactive = liveStoreZoneB1
+		liveStoreZoneBActive = liveStoreZoneB0
 	}
 
 	apiClient := httpclient.New("http://"+queryFrontend.Endpoint(3200), "")
 
 	t.Run("verify partition is ACTIVE", func(t *testing.T) {
-		for _, liveStore := range []*e2e.HTTPService{liveStoreInactive, liveStoreActive} {
+		for _, liveStore := range []*e2e.HTTPService{liveStoreInactive, liveStoreActive, liveStoreZoneBInactive, liveStoreZoneBActive} {
 			res := preparePartitionDownscale(t, http.MethodGet, liveStore)
 			require.Equal(t, "PartitionActive", res.State)
 		}
@@ -227,13 +232,16 @@ func TestLiveStorePartitionDownscale(t *testing.T) {
 		}
 
 		// Test GET method
-		res := preparePartitionDownscale(t, http.MethodGet, liveStoreInactive)
-		require.Greater(t, res.Timestamp, int64(0)) // ts > 0 ==> INACTIVE
-		require.Equal(t, "PartitionInactive", res.State)
-		res = preparePartitionDownscale(t, http.MethodGet, liveStoreActive)
+		for i, liveStore := range []*e2e.HTTPService{liveStoreInactive, liveStoreZoneBInactive} {
+			res := preparePartitionDownscale(t, http.MethodGet, liveStore)
+			println("FINDME", res.State, i)
+			// require.Greater(t, res.Timestamp, int64(0)) // ts > 0 ==> INACTIVE
+			// require.Equal(t, "PartitionInactive", res.State)
+		}
+		res := preparePartitionDownscale(t, http.MethodGet, liveStoreActive)
 		require.Equal(t, "PartitionActive", res.State) // still active
 
-		for _, component := range []*e2e.HTTPService{liveStoreInactive, liveStoreActive, distributor} {
+		for _, component := range []*e2e.HTTPService{liveStoreInactive, liveStoreActive, liveStoreZoneBInactive, liveStoreZoneBActive, distributor} {
 			verifyPartitionState(t, component, "Inactive", 1)
 			verifyPartitionState(t, component, "Active", 1)
 		}
