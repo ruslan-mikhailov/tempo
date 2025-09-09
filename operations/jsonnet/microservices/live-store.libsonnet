@@ -95,6 +95,7 @@
       'grafana.com/rollout-mirror-replicas-from-resource-name': tempo_live_store_replica_template.metadata.name,
       'grafana.com/rollout-mirror-replicas-from-resource-kind': tempo_live_store_replica_template.kind,
       'grafana.com/rollout-mirror-replicas-from-resource-api-version': tempo_live_store_replica_template.apiVersion,
+      // TODO: What config to put?
       'grafana.com/rollout-delayed-downscale': $._config.live_store_downscale_delay,
       'grafana.com/rollout-prepare-delayed-downscale-url': 'http://pod:3100/live-store/prepare-partition-downscale',
     }) +
@@ -164,6 +165,8 @@
       'tempo.yaml': k.util.manifestYaml($.tempo_live_store_config),
     }),
 
+  // TODO: use already declared function
+  // 
   // replicaTemplate creates new ReplicaTemplate resource.
   // If replicas is > 0, spec.replicas field is specified in the resource, if replicas <= 0, spec.replicas field is hidden.
   // Syntactically valid label selector is required, and may be used by HorizontalPodAutoscaler controller when ReplicaTemplate
