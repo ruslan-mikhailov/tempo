@@ -90,7 +90,14 @@
 
     self.newLiveStoreStatefulSet(name, container) +
     statefulSet.mixin.metadata.withLabels({ 'rollout-group': 'live-store' }) +
-    statefulSet.mixin.metadata.withAnnotations({ 'rollout-max-unavailable': std.toString($._config.live_store.max_unavailable) }) +
+    statefulSet.mixin.metadata.withAnnotations({
+      'rollout-max-unavailable': std.toString($._config.live_store.max_unavailable),
+      'grafana.com/rollout-mirror-replicas-from-resource-name': tempo_live_store_replica_template.metadata.name,
+      'grafana.com/rollout-mirror-replicas-from-resource-kind': tempo_live_store_replica_template.kind,
+      'grafana.com/rollout-mirror-replicas-from-resource-api-version': tempo_live_store_replica_template.apiVersion,
+      'grafana.com/rollout-delayed-downscale': $._config.live_store_downscale_delay,
+      'grafana.com/rollout-prepare-delayed-downscale-url': 'http://pod:3100/live-store/prepare-partition-downscale',
+    }) +
     statefulSet.mixin.spec.template.metadata.withLabels({ name: name, 'rollout-group': 'live-store' }) +
     statefulSet.mixin.spec.selector.withMatchLabels({ name: name, 'rollout-group': 'live-store' }) +
     statefulSet.mixin.spec.updateStrategy.withType('OnDelete') +
@@ -156,6 +163,32 @@
     configMap.withData({
       'tempo.yaml': k.util.manifestYaml($.tempo_live_store_config),
     }),
+
+  // replicaTemplate creates new ReplicaTemplate resource.
+  // If replicas is > 0, spec.replicas field is specified in the resource, if replicas <= 0, spec.replicas field is hidden.
+  // Syntactically valid label selector is required, and may be used by HorizontalPodAutoscaler controller when ReplicaTemplate
+  // is used as scaled resource depending on metric target type.
+  // (When using targetType=AverageValue, label selector is not used for scaling computation).
+  local replicaTemplate(name, replicas, label_selector) = {
+    apiVersion: 'rollout-operator.grafana.com/v1',
+    kind: 'ReplicaTemplate',
+    metadata: {
+      name: name,
+      namespace: $._config.namespace,
+    },
+    spec: {
+      labelSelector: label_selector,
+    } + (
+      if replicas <= 0 then {
+        replicas:: null,  // Hide replicas field.
+      } else {
+        replicas: replicas,
+      }
+    ),
+  },
+
+  // Create resources that will be targetted by ScaledObjects.
+  tempo_live_store_replica_template: replicaTemplate('live-store', $._config.live_store.replicas, label_selector=$._config.live_store_replica_template_label_selector),
 
   //
   // Multi-zone live-stores are non-optional - no single-zone fallback.
