@@ -144,6 +144,7 @@
       replicas: 0,
       max_unavailable: 25,
       allow_multiple_replicas_on_same_node: false,
+      downscale_delay: '30m',
       resources: {
         requests: {
           cpu: '500m',
