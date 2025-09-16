@@ -810,6 +810,9 @@ func (t *App) initLiveStore() (services.Service, error) {
 	t.Server.HTTPRouter().Methods(http.MethodGet, http.MethodPost, http.MethodDelete).
 		Path("/live-store/prepare-partition-downscale").
 		Handler(http.HandlerFunc(t.liveStore.PreparePartitionDownscaleHandler))
+	t.Server.HTTPRouter().Methods(http.MethodGet, http.MethodPost, http.MethodDelete).
+		Path("/live-store/prepare-shutdown").
+		Handler(http.HandlerFunc(t.liveStore.PrepareShutdownHandler))
 
 	return t.liveStore, nil
 }
