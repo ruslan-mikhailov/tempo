@@ -127,7 +127,7 @@ func (s *LiveStore) PreparePartitionDownscaleHandler(w http.ResponseWriter, r *h
 	}
 }
 
-// PrepareShutdownHandler prepares the live-store for shutdown by changing the ring state
+// PrepareDownscaleHandler prepares the live-store for shutdown by changing the ring state
 // to stop accepting writes.
 //
 // Following methods are supported:
@@ -140,7 +140,7 @@ func (s *LiveStore) PreparePartitionDownscaleHandler(w http.ResponseWriter, r *h
 //
 //   - DELETE
 //     Disables prepare shutdown mode (sets ring back to read-write).
-func (s *LiveStore) PrepareShutdownHandler(w http.ResponseWriter, r *http.Request) {
+func (s *LiveStore) PrepareDownscaleHandler(w http.ResponseWriter, r *http.Request) {
 	// Don't allow callers to change the shutdown configuration while we're in the middle
 	// of starting or shutting down.
 	if s.State() != services.Running {
