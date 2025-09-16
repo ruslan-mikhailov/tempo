@@ -147,14 +147,20 @@ func (s *LiveStore) PrepareShutdownHandler(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
+	if s.ingestPartitionLifecycler == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
 
 	switch r.Method {
 	case http.MethodPost:
-		s.setPrepareShutdown()
+		// s.ingestPartitionLifecycler.SetCreatePartitionOnStartup(false)
+		s.ingestPartitionLifecycler.SetRemoveOwnerOnShutdown(true)
 		level.Info(s.logger).Log("msg", "live-store prepared for shutdown")
 
 	case http.MethodDelete:
-		s.unsetPrepareShutdown()
+		// s.ingestPartitionLifecycler.SetCreatePartitionOnStartup(true)
+		s.ingestPartitionLifecycler.SetRemoveOwnerOnShutdown(false)
 		level.Info(s.logger).Log("msg", "live-store shutdown preparation cancelled")
 
 	case http.MethodGet:
@@ -163,38 +169,5 @@ func (s *LiveStore) PrepareShutdownHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	prepared := s.isPreparedForShutdown()
-	util.WriteJSONResponse(w, map[string]any{"prepared": prepared})
-}
-
-// setPrepareShutdown toggles live-store lifecycler config to prepare for shutdown
-func (s *LiveStore) setPrepareShutdown() {
-	s.livestoreLifecycler.SetUnregisterOnShutdown(true)
-	s.livestoreLifecycler.SetFlushOnShutdown(true)
-	s.livestoreLifecycler.SetKeepInstanceInTheRingOnShutdown(false)
-
-	if s.ingestPartitionLifecycler != nil {
-		// When the prepare shutdown endpoint is called there are two changes in the partitions ring behavior:
-		//
-		// 1. If setPrepareShutdown() is called at startup, because of the shutdown marker found on disk,
-		//    the live-store shouldn't create the partition if doesn't exist, because we expect the live-store will
-		//    be scaled down shortly after.
-		// 2. When the live-store will shutdown we'll have to remove the live-store from the partition owners,
-		//    because we expect the live-store to be scaled down.
-		s.ingestPartitionLifecycler.SetCreatePartitionOnStartup(false)
-		s.ingestPartitionLifecycler.SetRemoveOwnerOnShutdown(true)
-	}
-}
-
-// unsetPrepareShutdown resets live-store lifecycler config back to normal operation
-func (s *LiveStore) unsetPrepareShutdown() {
-	if s.ingestPartitionLifecycler != nil {
-		s.ingestPartitionLifecycler.SetCreatePartitionOnStartup(true)
-		s.ingestPartitionLifecycler.SetRemoveOwnerOnShutdown(false)
-	}
-}
-
-// isPreparedForShutdown returns true if the live-store is prepared for shutdown
-func (s *LiveStore) isPreparedForShutdown() bool {
-	return shutdownMarker
+	w.WriteHeader(http.StatusNoContent)
 }
