@@ -126,3 +126,58 @@ func (s *LiveStore) PreparePartitionDownscaleHandler(w http.ResponseWriter, r *h
 		})
 	}
 }
+
+// TODO: change comments here
+// PrepareDownscaleHandler prepares the live-store for shutdown by changing the ring state
+// to stop accepting writes.
+//
+// Following methods are supported:
+//
+//   - GET
+//     Returns the current prepare shutdown state.
+//
+//   - POST
+//     Enables prepare shutdown mode (sets ring to read-only).
+//
+//   - DELETE
+//     Disables prepare shutdown mode (sets ring back to read-write).
+func (s *LiveStore) PrepareDownscaleHandler(w http.ResponseWriter, r *http.Request) {
+	// Don't allow callers to change the shutdown configuration while we're in the middle
+	// of starting or shutting down.
+	if s.State() != services.Running {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	if s.ingestPartitionLifecycler == nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodPost:
+		state, _, err := s.ingestPartitionLifecycler.GetPartitionState(r.Context())
+		if err != nil {
+			level.Error(s.logger).Log("msg", "failed to get partition state", "err", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if state != ring.PartitionInactive {
+			level.Info(s.logger).Log("msg", "partition must be in INACTIVE state")
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		s.ingestPartitionLifecycler.SetRemoveOwnerOnShutdown(true)
+		level.Info(s.logger).Log("msg", "live-store prepared for shutdown")
+
+	case http.MethodDelete:
+		s.ingestPartitionLifecycler.SetRemoveOwnerOnShutdown(false)
+		level.Info(s.logger).Log("msg", "live-store shutdown preparation cancelled")
+
+	case http.MethodGet:
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
