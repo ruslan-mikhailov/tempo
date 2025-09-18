@@ -1,6 +1,7 @@
 package livestore
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,6 +75,12 @@ func (s *LiveStore) runInBackground(fn func()) {
 
 func (s *LiveStore) globalCompleteLoop(idx int) {
 	for {
+		// Check if context is cancelled before processing
+		if s.ctx.Err() != nil {
+			level.Info(s.logger).Log("msg", "globalCompleteLoop stopping due to context cancellation 1", "idx", idx)
+			return
+		}
+
 		o := s.completeQueues.Dequeue(idx)
 		if o == nil {
 			return // queue is closed
@@ -87,6 +94,12 @@ func (s *LiveStore) globalCompleteLoop(idx int) {
 			continue
 		}
 
+		// Check context again before starting potentially long-running operation
+		if s.ctx.Err() != nil {
+			level.Info(s.logger).Log("msg", "skipping block completion due to shutdown 2", "tenant", op.tenantID, "block", op.blockID)
+			return
+		}
+
 		start := time.Now()
 		inst, err := s.getOrCreateInstance(op.tenantID)
 		if err != nil {
@@ -95,11 +108,21 @@ func (s *LiveStore) globalCompleteLoop(idx int) {
 			return
 		}
 
-		err = inst.completeBlock(s.ctx, op.blockID)
+		// Use a timeout context for block completion to prevent hanging during shutdown
+		completionTimeout := 30 * time.Second
+		completionCtx, cancel := context.WithTimeout(s.ctx, completionTimeout)
+		err = inst.completeBlock(completionCtx, op.blockID)
+		cancel()
+
 		duration := time.Since(start)
 		metricCompletionDuration.Observe(duration.Seconds())
 
 		if err != nil {
+			// Check if the error is due to context cancellation during shutdown
+			if errors.Is(err, context.Canceled) && s.ctx.Err() != nil {
+				level.Info(s.logger).Log("msg", "block completion cancelled during shutdown 3", "tenant", op.tenantID, "block", op.blockID)
+				return
+			}
 			level.Error(s.logger).Log("msg", "failed to complete block", "tenant", op.tenantID, "block", op.blockID, "err", err)
 			observeFailedOp(op)
 
