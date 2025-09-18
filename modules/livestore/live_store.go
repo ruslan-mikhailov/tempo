@@ -198,7 +198,8 @@ func New(cfg Config, overridesService overrides.Interface, logger log.Logger, re
 
 	// Define lifecycler delegates in reverse order (last to be called defined first because they're
 	// chained via "next delegate").
-	delegate := ring.BasicLifecyclerDelegate(s)
+	var delegate ring.BasicLifecyclerDelegate
+	delegate = newLiveStoreDelegate()
 	delegate = ring.NewLeaveOnStoppingDelegate(delegate, s.logger)
 	delegate = ring.NewAutoForgetDelegate(ringAutoForgetUnhealthyPeriods*cfg.Ring.HeartbeatTimeout, delegate, s.logger)
 
@@ -447,21 +448,27 @@ func (s *LiveStore) cutOneInstanceToWal(inst *instance, immediate bool) {
 	}
 }
 
+type liveStoreDeligate struct{}
+
+func newLiveStoreDelegate() *liveStoreDeligate {
+	return &liveStoreDeligate{}
+}
+
 // OnRingInstanceRegister implements ring.BasicLifecyclerDelegate
-func (s *LiveStore) OnRingInstanceRegister(_ *ring.BasicLifecycler, _ ring.Desc, _ bool, _ string, _ ring.InstanceDesc) (ring.InstanceState, ring.Tokens) {
+func (s *liveStoreDeligate) OnRingInstanceRegister(_ *ring.BasicLifecycler, _ ring.Desc, _ bool, _ string, _ ring.InstanceDesc) (ring.InstanceState, ring.Tokens) {
 	return ring.ACTIVE, nil // no tokens needed for the livestore ring, we just need to be in the ring for service discovery
 }
 
 // OnRingInstanceTokens implements ring.BasicLifecyclerDelegate
-func (s *LiveStore) OnRingInstanceTokens(*ring.BasicLifecycler, ring.Tokens) {
+func (s *liveStoreDeligate) OnRingInstanceTokens(*ring.BasicLifecycler, ring.Tokens) {
 }
 
 // OnRingInstanceStopping implements ring.BasicLifecyclerDelegate
-func (s *LiveStore) OnRingInstanceStopping(*ring.BasicLifecycler) {
+func (s *liveStoreDeligate) OnRingInstanceStopping(*ring.BasicLifecycler) {
 }
 
 // OnRingInstanceHeartbeat implements ring.BasicLifecyclerDelegate
-func (s *LiveStore) OnRingInstanceHeartbeat(*ring.BasicLifecycler, *ring.Desc, *ring.InstanceDesc) {
+func (s *liveStoreDeligate) OnRingInstanceHeartbeat(*ring.BasicLifecycler, *ring.Desc, *ring.InstanceDesc) {
 }
 
 // FindTraceByID implements tempopb.Querier
