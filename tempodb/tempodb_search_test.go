@@ -2791,5 +2791,87 @@ func TestSearchByShortTraceID(t *testing.T) {
 				}
 			}
 		})
+
+		// TODO: the test is AI generated, need to review and rewrite it
+		//
+		// Test dynamic trace ID comparison with span attribute
+		// Create a new trace with a span attribute containing the trace ID
+		t.Run(fmt.Sprintf("%s: dynamic trace id comparison with span attribute", v.Version()), func(t *testing.T) {
+			// Create a trace with a span attribute containing the trace ID
+			dynamicTestID := test.ValidTraceID(nil)
+			traceIDHex := fmt.Sprintf("%x", dynamicTestID)
+
+			// Create a simple trace with a span that has an attribute with the trace ID
+			dynamicTrace := &tempopb.Trace{
+				ResourceSpans: []*v1.ResourceSpans{
+					{
+						Resource: &v1_resource.Resource{
+							Attributes: []*v1_common.KeyValue{
+								stringKV("service.name", "DynamicTestService"),
+							},
+						},
+						ScopeSpans: []*v1.ScopeSpans{
+							{
+								Spans: []*v1.Span{
+									{
+										TraceId:           dynamicTestID,
+										Name:              "TestSpan",
+										SpanId:            []byte{1, 1, 1},
+										StartTimeUnixNano: uint64(1000 * time.Second),
+										EndTimeUnixNano:   uint64(1001 * time.Second),
+										Status:            &v1.Status{},
+										Attributes: []*v1_common.KeyValue{
+											// Add the trace ID as a span attribute for dynamic comparison
+											stringKV("traceIdCopy", traceIDHex),
+											// Also test with leading zeros
+											stringKV("traceIdWithZeros", strings.Repeat("0", 32-len(traceIDHex))+traceIDHex),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			// Write this trace to a new block
+			dynamicMeta := &backend.BlockMeta{BlockID: backend.NewUUID(), TenantID: testTenantID}
+			dynamicHead, err := wal.NewBlock(dynamicMeta, model.CurrentEncoding)
+			require.NoError(t, err)
+
+			b1, err := dec.PrepareForWrite(dynamicTrace, start, end)
+			require.NoError(t, err)
+			b2, err := dec.ToObject([][]byte{b1})
+			require.NoError(t, err)
+			err = dynamicHead.Append(dynamicTestID, b2, start, end, true)
+			require.NoError(t, err)
+
+			dynamicBlock, err := w.CompleteBlock(context.Background(), dynamicHead)
+			require.NoError(t, err)
+
+			dynamicFetcher := traceql.NewSpansetFetcherWrapper(func(ctx context.Context, req traceql.FetchSpansRequest) (traceql.FetchSpansResponse, error) {
+				return dynamicBlock.Fetch(ctx, req, common.DefaultSearchOptions())
+			})
+
+			// Test dynamic comparison: {trace:id = span.traceIdCopy}
+			req := &tempopb.SearchRequest{Query: `{trace:id = span.traceIdCopy}`}
+			res, err := traceql.NewEngine().ExecuteSearch(ctx, req, dynamicFetcher)
+			require.NoError(t, err, "search request: %+v", req)
+			require.NotEmpty(t, res.Traces, "should find trace with dynamic comparison")
+			require.Len(t, res.Traces, 1, "should find exactly one trace")
+
+			// Test dynamic comparison with leading zeros: {trace:id = span.traceIdWithZeros}
+			req = &tempopb.SearchRequest{Query: `{trace:id = span.traceIdWithZeros}`}
+			res, err = traceql.NewEngine().ExecuteSearch(ctx, req, dynamicFetcher)
+			require.NoError(t, err, "search request: %+v", req)
+			require.NotEmpty(t, res.Traces, "should find trace with dynamic comparison (with leading zeros)")
+			require.Len(t, res.Traces, 1, "should find exactly one trace")
+
+			// Test dynamic inequality: {trace:id != span.traceIdCopy}
+			req = &tempopb.SearchRequest{Query: `{trace:id != span.traceIdCopy}`}
+			res, err = traceql.NewEngine().ExecuteSearch(ctx, req, dynamicFetcher)
+			require.NoError(t, err, "search request: %+v", req)
+			require.Empty(t, res.Traces, "should not find trace when IDs are equal but using != operator")
+		})
 	}
 }

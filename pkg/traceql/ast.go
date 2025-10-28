@@ -520,17 +520,6 @@ func newBinaryOperation(op Operator, lhs, rhs FieldExpression) FieldExpression {
 		RHS: rhs,
 	}
 
-	if attr, ok := lhs.(Attribute); ok && attr.Intrinsic == IntrinsicTraceID {
-		if static, ok := rhs.(Static); ok {
-			binop.RHS = normalizeTraceIDOperand(static)
-		}
-	}
-	if attr, ok := rhs.(Attribute); ok && attr.Intrinsic == IntrinsicTraceID {
-		if static, ok := lhs.(Static); ok {
-			binop.LHS = normalizeTraceIDOperand(static)
-		}
-	}
-
 	// AST rewrite for simplification
 	if !binop.referencesSpan() && binop.validate() == nil {
 		if simplified, err := binop.execute(nil); err == nil {
@@ -543,16 +532,6 @@ func newBinaryOperation(op Operator, lhs, rhs FieldExpression) FieldExpression {
 	}
 
 	return binop
-}
-
-// normalizeTraceIDOperand normalizes a Static operand for trace ID
-func normalizeTraceIDOperand(operand Static) Static {
-	if operand.Type != TypeString {
-		return operand
-	}
-	traceID := operand.EncodeToString(false)
-	traceID = strings.TrimLeft(traceID, "0")
-	return NewStaticString(traceID)
 }
 
 // nolint: revive
@@ -575,6 +554,24 @@ func (o *BinaryOperation) impliedType() StaticType {
 
 func (o *BinaryOperation) referencesSpan() bool {
 	return o.LHS.referencesSpan() || o.RHS.referencesSpan()
+}
+
+// isIDComparison checks if this binary operation is comparing trace/span IDs,
+// which need special handling for leading zeros.
+func (o *BinaryOperation) isIDComparison() bool {
+	// Check if LHS is a trace/span/parent ID
+	if attr, ok := o.LHS.(Attribute); ok {
+		if attr.Intrinsic == IntrinsicTraceID || attr.Intrinsic == IntrinsicSpanID || attr.Intrinsic == IntrinsicParentID {
+			return true
+		}
+	}
+	// Check if RHS is a trace/span/parent ID
+	if attr, ok := o.RHS.(Attribute); ok {
+		if attr.Intrinsic == IntrinsicTraceID || attr.Intrinsic == IntrinsicSpanID || attr.Intrinsic == IntrinsicParentID {
+			return true
+		}
+	}
+	return false
 }
 
 type UnaryOperation struct {
@@ -831,6 +828,37 @@ func (s Static) NotEquals(o *Static) bool {
 	}
 
 	return !s.Equals(o)
+}
+
+// IdsEqual compares two Static values as trace/span IDs, normalizing for leading zeros.
+// Trace and span IDs can be represented with or without leading zeros (e.g., "00000123" vs "123"),
+// and should be considered equal. This function handles both string representations by
+// comparing them as byte slices after removing leading zeros.
+func IdsEqual(lhs, rhs *Static) bool {
+	if lhs.Type == TypeNil || rhs.Type == TypeNil {
+		return false
+	}
+
+	if lhs.Type != TypeString || rhs.Type != TypeString {
+		return lhs.Equals(rhs)
+	}
+
+	// TODO: use the bytes directly instead of encoding to string
+	lhsStr := lhs.EncodeToString(false)
+	rhsStr := rhs.EncodeToString(false)
+
+	lhsStr = strings.TrimLeft(lhsStr, "0")
+	rhsStr = strings.TrimLeft(rhsStr, "0")
+
+	// Handle the edge case where the ID is all zeros
+	if lhsStr == "" {
+		lhsStr = "0"
+	}
+	if rhsStr == "" {
+		rhsStr = "0"
+	}
+
+	return lhsStr == rhsStr
 }
 
 func (s Static) StrictEquals(o *Static) bool {

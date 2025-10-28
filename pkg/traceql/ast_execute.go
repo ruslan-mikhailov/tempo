@@ -580,8 +580,14 @@ func (o *BinaryOperation) execute(span Span) (Static, error) {
 	case OpPower:
 		return NewStaticFloat(math.Pow(lhs.Float(), rhs.Float())), nil
 	case OpEqual:
+		if o.isIDComparison() {
+			return NewStaticBool(IdsEqual(&lhs, &rhs)), nil
+		}
 		return NewStaticBool(lhs.Equals(&rhs)), nil
 	case OpNotEqual:
+		if o.isIDComparison() {
+			return NewStaticBool(!IdsEqual(&lhs, &rhs)), nil
+		}
 		return NewStaticBool(lhs.NotEquals(&rhs)), nil
 	default:
 		return NewStaticNil(), errors.New("unexpected operator " + o.Op.String())
