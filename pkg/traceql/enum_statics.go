@@ -21,6 +21,7 @@ const (
 	TypeDuration
 	TypeStatus
 	TypeKind
+	TypeID // type used for trace IDs, span IDs, and parent IDs
 )
 
 // isMatchingOperand returns whether two types can be combined with a binary operator. the kind of operator is
@@ -40,6 +41,11 @@ func (t StaticType) isMatchingOperand(otherT StaticType) bool {
 	}
 
 	if t == TypeNil || otherT == TypeNil {
+		return true
+	}
+
+	// TypeID and TypeString are compatible (for comparing IDs with string literals)
+	if (t == TypeID && otherT == TypeString) || (t == TypeString && otherT == TypeID) {
 		return true
 	}
 
@@ -116,6 +122,8 @@ func (t StaticType) String() string {
 		return "TypeStatus"
 	case TypeKind:
 		return "TypeKind"
+	case TypeID:
+		return "TypeID"
 	default:
 		return fmt.Sprintf("StaticType(%d)", int(t))
 	}

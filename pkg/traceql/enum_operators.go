@@ -86,7 +86,7 @@ func binaryTypeValid(op Operator, t StaticType) bool {
 			op == OpGreaterEqual ||
 			op == OpLess ||
 			op == OpLessEqual
-	case TypeString, TypeStringArray:
+	case TypeString, TypeStringArray, TypeID:
 		return op == OpEqual ||
 			op == OpNotEqual ||
 			op == OpRegex ||

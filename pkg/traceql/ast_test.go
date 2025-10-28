@@ -584,7 +584,7 @@ func TestStatic_compare(t *testing.T) {
 	}
 }
 
-func TestIdsEqual(t *testing.T) {
+func TestTypeID(t *testing.T) {
 	tests := []struct {
 		name     string
 		lhs      Static
@@ -593,72 +593,66 @@ func TestIdsEqual(t *testing.T) {
 	}{
 		{
 			name:     "equal IDs without leading zeros",
-			lhs:      NewStaticString("123456"),
-			rhs:      NewStaticString("123456"),
+			lhs:      NewStaticID("123456"),
+			rhs:      NewStaticID("123456"),
 			expected: true,
 		},
 		{
 			name:     "equal IDs with leading zeros on left",
-			lhs:      NewStaticString("00123456"),
-			rhs:      NewStaticString("123456"),
+			lhs:      NewStaticID("00123456"),
+			rhs:      NewStaticID("123456"),
 			expected: true,
 		},
 		{
 			name:     "equal IDs with leading zeros on right",
-			lhs:      NewStaticString("123456"),
-			rhs:      NewStaticString("00123456"),
+			lhs:      NewStaticID("123456"),
+			rhs:      NewStaticID("00123456"),
 			expected: true,
 		},
 		{
 			name:     "equal IDs with leading zeros on both",
-			lhs:      NewStaticString("0000123456"),
-			rhs:      NewStaticString("00123456"),
+			lhs:      NewStaticID("0000123456"),
+			rhs:      NewStaticID("00123456"),
 			expected: true,
 		},
 		{
 			name:     "different IDs",
-			lhs:      NewStaticString("123456"),
-			rhs:      NewStaticString("654321"),
+			lhs:      NewStaticID("123456"),
+			rhs:      NewStaticID("654321"),
 			expected: false,
 		},
 		{
 			name:     "different IDs with leading zeros",
-			lhs:      NewStaticString("00123456"),
-			rhs:      NewStaticString("00654321"),
+			lhs:      NewStaticID("00123456"),
+			rhs:      NewStaticID("00654321"),
 			expected: false,
 		},
 		{
 			name:     "all zeros",
-			lhs:      NewStaticString("0000"),
-			rhs:      NewStaticString("0"),
+			lhs:      NewStaticID("0000"),
+			rhs:      NewStaticID("0"),
 			expected: true,
 		},
 		{
 			name:     "nil comparisons",
 			lhs:      StaticNil,
-			rhs:      NewStaticString("123"),
+			rhs:      NewStaticID("123"),
 			expected: false,
 		},
 		{
-			name:     "non-string types fall back to normal equals",
-			lhs:      NewStaticInt(123),
-			rhs:      NewStaticInt(123),
-			expected: true,
-		},
-		{
 			name:     "hex trace IDs with leading zeros",
-			lhs:      NewStaticString("00000000000000000000000000000123"),
-			rhs:      NewStaticString("123"),
+			lhs:      NewStaticID("00000000000000000000000000000123"),
+			rhs:      NewStaticID("123"),
 			expected: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := IdsEqual(&tt.lhs, &tt.rhs)
+			result := tt.lhs.Equals(&tt.rhs)
 			assert.Equal(t, tt.expected, result)
 			// Test symmetry
-			result = IdsEqual(&tt.rhs, &tt.lhs)
+			result = tt.rhs.Equals(&tt.lhs)
 			assert.Equal(t, tt.expected, result)
 		})
 	}
@@ -1015,12 +1009,12 @@ func (m *mockSpan) WithAttrBool(key string, value bool) *mockSpan {
 func (m *mockSpan) AttributeFor(a Attribute) (Static, bool) {
 	// Handle intrinsic attributes
 	if a.Intrinsic == IntrinsicTraceID && m.traceID != nil {
-		// Convert trace ID bytes to hex string
-		return NewStaticString(fmt.Sprintf("%x", m.traceID)), true
+		// Convert trace ID bytes to hex string and return as TypeID
+		return NewStaticID(fmt.Sprintf("%x", m.traceID)), true
 	}
 	if a.Intrinsic == IntrinsicSpanID && m.id != nil {
-		// Convert span ID bytes to hex string
-		return NewStaticString(fmt.Sprintf("%x", m.id)), true
+		// Convert span ID bytes to hex string and return as TypeID
+		return NewStaticID(fmt.Sprintf("%x", m.id)), true
 	}
 
 	s, ok := m.attributes[a]

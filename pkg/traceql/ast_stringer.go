@@ -108,6 +108,16 @@ func (s Static) EncodeToString(quotes bool) string {
 			return "`" + str + "`"
 		}
 		return str
+	case TypeID:
+		// TypeID stores normalized hex string (without leading zeros)
+		var str string
+		if len(s.valBytes) > 0 {
+			str = unsafe.String(unsafe.SliceData(s.valBytes), len(s.valBytes))
+		}
+		if quotes {
+			return "`" + str + "`"
+		}
+		return str
 	case TypeBoolean:
 		b, _ := s.Bool()
 		return strconv.FormatBool(b)

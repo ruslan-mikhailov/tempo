@@ -556,24 +556,6 @@ func (o *BinaryOperation) referencesSpan() bool {
 	return o.LHS.referencesSpan() || o.RHS.referencesSpan()
 }
 
-// isIDComparison checks if this binary operation is comparing trace/span IDs,
-// which need special handling for leading zeros.
-func (o *BinaryOperation) isIDComparison() bool {
-	// Check if LHS is a trace/span/parent ID
-	if attr, ok := o.LHS.(Attribute); ok {
-		if attr.Intrinsic == IntrinsicTraceID || attr.Intrinsic == IntrinsicSpanID || attr.Intrinsic == IntrinsicParentID {
-			return true
-		}
-	}
-	// Check if RHS is a trace/span/parent ID
-	if attr, ok := o.RHS.(Attribute); ok {
-		if attr.Intrinsic == IntrinsicTraceID || attr.Intrinsic == IntrinsicSpanID || attr.Intrinsic == IntrinsicParentID {
-			return true
-		}
-	}
-	return false
-}
-
 type UnaryOperation struct {
 	Op         Operator
 	Expression FieldExpression
@@ -651,6 +633,21 @@ func NewStaticString(s string) Static {
 	return Static{
 		Type:     TypeString,
 		valBytes: unsafe.Slice(unsafe.StringData(s), len(s)),
+	}
+}
+
+// NewStaticID creates a new Static value of type TypeID from a hex string.
+// IDs are normalized by trimming leading zeros for comparison purposes.
+func NewStaticID(hexID string) Static {
+	// Trim leading zeros for normalization
+	normalized := strings.TrimLeft(hexID, "0")
+	// Handle the edge case where the ID is all zeros
+	if normalized == "" {
+		normalized = "0"
+	}
+	return Static{
+		Type:     TypeID,
+		valBytes: unsafe.Slice(unsafe.StringData(normalized), len(normalized)),
 	}
 }
 
@@ -812,7 +809,40 @@ func (s Static) Equals(o *Static) bool {
 		return sf == o.Float()
 	case TypeKind, TypeBoolean:
 		return s.Type == o.Type && s.valScalar == o.valScalar
-	case TypeString, TypeIntArray, TypeFloatArray, TypeBooleanArray:
+	case TypeID:
+		// TypeID values are already normalized (leading zeros trimmed)
+		if o.Type == TypeID {
+			return bytes.Equal(s.valBytes, o.valBytes)
+		}
+		// Allow comparing TypeID with TypeString by normalizing the string
+		if o.Type == TypeString {
+			// Normalize the string side and compare
+			oStr := o.EncodeToString(false)
+			oNormalized := strings.TrimLeft(oStr, "0")
+			if oNormalized == "" {
+				oNormalized = "0"
+			}
+			sStr := s.EncodeToString(false)
+			return sStr == oNormalized
+		}
+		return false
+	case TypeString:
+		if o.Type == TypeString {
+			return bytes.Equal(s.valBytes, o.valBytes)
+		}
+		// Allow comparing TypeString with TypeID by normalizing the string
+		if o.Type == TypeID {
+			// Normalize this string side and compare with the ID
+			sStr := s.EncodeToString(false)
+			sNormalized := strings.TrimLeft(sStr, "0")
+			if sNormalized == "" {
+				sNormalized = "0"
+			}
+			oStr := o.EncodeToString(false)
+			return sNormalized == oStr
+		}
+		return false
+	case TypeIntArray, TypeFloatArray, TypeBooleanArray:
 		return s.Type == o.Type && bytes.Equal(s.valBytes, o.valBytes)
 	case TypeStringArray:
 		return s.Type == o.Type && slices.Equal(s.valStrings, o.valStrings)
@@ -830,37 +860,6 @@ func (s Static) NotEquals(o *Static) bool {
 	return !s.Equals(o)
 }
 
-// IdsEqual compares two Static values as trace/span IDs, normalizing for leading zeros.
-// Trace and span IDs can be represented with or without leading zeros (e.g., "00000123" vs "123"),
-// and should be considered equal. This function handles both string representations by
-// comparing them as byte slices after removing leading zeros.
-func IdsEqual(lhs, rhs *Static) bool {
-	if lhs.Type == TypeNil || rhs.Type == TypeNil {
-		return false
-	}
-
-	if lhs.Type != TypeString || rhs.Type != TypeString {
-		return lhs.Equals(rhs)
-	}
-
-	// TODO: use the bytes directly instead of encoding to string
-	lhsStr := lhs.EncodeToString(false)
-	rhsStr := rhs.EncodeToString(false)
-
-	lhsStr = strings.TrimLeft(lhsStr, "0")
-	rhsStr = strings.TrimLeft(rhsStr, "0")
-
-	// Handle the edge case where the ID is all zeros
-	if lhsStr == "" {
-		lhsStr = "0"
-	}
-	if rhsStr == "" {
-		rhsStr = "0"
-	}
-
-	return lhsStr == rhsStr
-}
-
 func (s Static) StrictEquals(o *Static) bool {
 	if s.Type != o.Type {
 		return false
@@ -871,7 +870,7 @@ func (s Static) StrictEquals(o *Static) bool {
 		sf := math.Float64frombits(s.valScalar)
 		of := math.Float64frombits(o.valScalar)
 		return sf == of
-	case TypeString, TypeIntArray, TypeFloatArray, TypeBooleanArray:
+	case TypeID, TypeString, TypeIntArray, TypeFloatArray, TypeBooleanArray:
 		return bytes.Equal(s.valBytes, o.valBytes)
 	case TypeStringArray:
 		return slices.Equal(s.valStrings, o.valStrings)
@@ -895,7 +894,7 @@ func (s Static) compare(o *Static) int {
 	}
 
 	switch s.Type {
-	case TypeString, TypeBooleanArray:
+	case TypeID, TypeString, TypeBooleanArray:
 		return bytes.Compare(s.valBytes, o.valBytes)
 	case TypeIntArray:
 		sa, _ := s.IntArray()
@@ -1147,9 +1146,9 @@ func (a Attribute) impliedType() StaticType {
 	case IntrinsicEventTimeSinceStart:
 		return TypeDuration
 	case IntrinsicLinkTraceID:
-		return TypeString
+		return TypeID
 	case IntrinsicLinkSpanID:
-		return TypeString
+		return TypeID
 	case IntrinsicParent:
 		return TypeNil
 	case IntrinsicTraceDuration:
@@ -1165,11 +1164,11 @@ func (a Attribute) impliedType() StaticType {
 	case IntrinsicNestedSetParent:
 		return TypeInt
 	case IntrinsicTraceID:
-		return TypeString
+		return TypeID
 	case IntrinsicSpanID:
-		return TypeString
+		return TypeID
 	case IntrinsicParentID:
-		return TypeString
+		return TypeID
 	}
 
 	return TypeAttribute

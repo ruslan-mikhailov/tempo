@@ -73,17 +73,23 @@ func TestSpansetFilter_TraceIDComparison(t *testing.T) {
 		{
 			desc:  "trace:id comparison with span attribute (dynamic)",
 			query: `{ trace:id = .traceIdCopy }`,
-			span: newMockSpan(nil).
-				WithTraceID([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x3a, 0xbc}).
-				WithSpanString("traceIdCopy", "123abc"),
+			span: func() *mockSpan {
+				m := newMockSpan(nil).
+					WithTraceID([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x3a, 0xbc})
+				m.attributes[NewAttribute("traceIdCopy")] = NewStaticID("123abc")
+				return m
+			}(),
 			matches: true,
 		},
 		{
 			desc:  "trace:id comparison with span attribute with leading zeros (dynamic)",
 			query: `{ trace:id = .traceIdCopy }`,
-			span: newMockSpan(nil).
-				WithTraceID([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x3a, 0xbc}).
-				WithSpanString("traceIdCopy", "00000000000123abc"),
+			span: func() *mockSpan {
+				m := newMockSpan(nil).
+					WithTraceID([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x3a, 0xbc})
+				m.attributes[NewAttribute("traceIdCopy")] = NewStaticID("00000000000123abc")
+				return m
+			}(),
 			matches: true,
 		},
 		{
@@ -109,8 +115,11 @@ func TestSpansetFilter_TraceIDComparison(t *testing.T) {
 		{
 			desc:  "span:id comparison with attribute (dynamic)",
 			query: `{ span:id = .spanIdCopy }`,
-			span: newMockSpan([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03}).
-				WithSpanString("spanIdCopy", "000010203"),
+			span: func() *mockSpan {
+				m := newMockSpan([]byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03})
+				m.attributes[NewAttribute("spanIdCopy")] = NewStaticID("000010203")
+				return m
+			}(),
 			matches: true,
 		},
 	}
