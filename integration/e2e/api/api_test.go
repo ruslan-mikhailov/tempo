@@ -198,6 +198,58 @@ func TestSearchTagsV2(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "nil value",
+			query: fmt.Sprintf(`{ %s = nil }`, spanX),
+			scope: "span",
+			expected: searchTagsV2Response{
+				Scopes: []ScopedTags{
+					{
+						Name: "span",
+						Tags: []string{firstBatch.SpanAttr, secondBatch.SpanAttr},
+					},
+				},
+			},
+		},
+		{
+			name:  "not nil value",
+			query: fmt.Sprintf(`{ %s != nil }`, spanX),
+			scope: "span",
+			expected: searchTagsV2Response{
+				Scopes: []ScopedTags{
+					{
+						Name: "span",
+						Tags: []string{firstBatch.SpanAttr, secondBatch.SpanAttr},
+					},
+				},
+			},
+		},
+		{
+			name:  "well-known column nil",
+			query: `{ resource.service.name = nil}`,
+			scope: "span",
+			expected: searchTagsV2Response{
+				Scopes: []ScopedTags{
+					{
+						Name: "span",
+						Tags: []string{firstBatch.SpanAttr, secondBatch.SpanAttr},
+					},
+				},
+			},
+		},
+		{
+			name:  "well-known column not nil",
+			query: `{ resource.service.name != nil}`,
+			scope: "span",
+			expected: searchTagsV2Response{
+				Scopes: []ScopedTags{
+					{
+						Name: "span",
+						Tags: []string{firstBatch.SpanAttr, secondBatch.SpanAttr},
+					},
+				},
+			},
+		},
 		// Unscoped not supported, unfiltered results.
 		{
 			name:  "unscoped span attribute",
@@ -343,6 +395,22 @@ func TestSearchTagValuesV2(t *testing.T) {
 		{
 			name:    "no filtering",
 			query:   "",
+			tagName: spanX,
+			expected: searchTagValuesV2Response{
+				TagValues: []TagValue{{Type: "string", Value: firstBatch.spanAttVal}, {Type: "string", Value: secondBatch.spanAttVal}},
+			},
+		},
+		{
+			name:    "nil value",
+			query:   fmt.Sprintf(`{ %s = nil }`, spanX),
+			tagName: spanX,
+			expected: searchTagValuesV2Response{
+				TagValues: []TagValue{},
+			},
+		},
+		{
+			name:    "not nil value",
+			query:   fmt.Sprintf(`{ %s != nil }`, spanX),
 			tagName: spanX,
 			expected: searchTagValuesV2Response{
 				TagValues: []TagValue{{Type: "string", Value: firstBatch.spanAttVal}, {Type: "string", Value: secondBatch.spanAttVal}},
