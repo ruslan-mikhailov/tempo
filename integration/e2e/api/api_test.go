@@ -349,6 +349,14 @@ func TestSearchTagValuesV2(t *testing.T) {
 			},
 		},
 		{
+			name:    "nil value",
+			query:   fmt.Sprintf(`{ %s=nil }`, spanX),
+			tagName: spanX,
+			expected: searchTagValuesV2Response{
+				TagValues: []TagValue{},
+			},
+		},
+		{
 			name:    "first batch - name",
 			query:   fmt.Sprintf(`{ name="%s" }`, firstBatch.name),
 			tagName: spanX,
