@@ -896,6 +896,7 @@ func (q *Querier) SearchBlock(ctx context.Context, req *tempopb.SearchBlockReque
 
 	if api.IsTraceQLQuery(req.SearchReq) {
 		fetcher := traceql.NewSpansetFetcherWrapper(func(ctx context.Context, req traceql.FetchSpansRequest) (traceql.FetchSpansResponse, error) {
+			fmt.Printf("\n\nFINDME spans request: %+v\n\n", req)
 			return q.store.Fetch(ctx, meta, req, opts)
 		})
 

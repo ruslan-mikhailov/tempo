@@ -534,6 +534,7 @@ func (rw *readerWriter) SearchTagValuesV2(ctx context.Context, meta *backend.Blo
 
 // Fetch only uses rw.r which has caching enabled
 func (rw *readerWriter) Fetch(ctx context.Context, meta *backend.BlockMeta, req traceql.FetchSpansRequest, opts common.SearchOptions) (traceql.FetchSpansResponse, error) {
+	fmt.Printf("\n\nFINDME spans request: %+v\n\n", req)
 	block, err := encoding.OpenBlock(meta, rw.r)
 	if err != nil {
 		return traceql.FetchSpansResponse{}, err

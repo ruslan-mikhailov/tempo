@@ -46,6 +46,10 @@ func (c queryValidatorWare) validateTraceQLQuery(queryParams url.Values) error {
 			return fmt.Errorf("TraceQL expression exceeds the configured maximum size of %d bytes, reduce the query expression size or contact your system administrator", c.maxQuerySizeBytes)
 		}
 
+		if traceql.IsSQLQuery(traceQLQuery) {
+			// TODO: validate SQL query
+			return nil
+		}
 		expr, err := traceql.Parse(traceQLQuery)
 		if err == nil {
 			err = traceql.Validate(expr)

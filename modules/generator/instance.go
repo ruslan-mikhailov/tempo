@@ -525,16 +525,18 @@ func (i *instance) QueryRange(ctx context.Context, req *tempopb.QueryRangeReques
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	expr, err := traceql.Parse(req.Query)
-	if err != nil {
-		return nil, fmt.Errorf("compiling query: %w", err)
-	}
-
 	unsafe := i.overrides.UnsafeQueryHints(i.instanceID)
 
 	timeOverlapCutoff := i.cfg.Processor.LocalBlocks.Metrics.TimeOverlapCutoff
-	if v, ok := expr.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
-		timeOverlapCutoff = v
+	// no hints in sql
+	if !traceql.IsSQLQuery(req.Query) {
+		expr, err := traceql.Parse(req.Query)
+		if err != nil {
+			return nil, fmt.Errorf("compiling query: %w", err)
+		}
+		if v, ok := expr.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
+			timeOverlapCutoff = v
+		}
 	}
 
 	e := traceql.NewEngine()

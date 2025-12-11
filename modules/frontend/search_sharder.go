@@ -358,13 +358,19 @@ func hashForSearchRequest(searchRequest *tempopb.SearchRequest) uint64 {
 		return 0
 	}
 
-	ast, err := traceql.Parse(searchRequest.Query)
-	if err != nil { // this should never occur. if we've made this far we've already validated the query can parse. however, for sanity, just fail to cache if we can't parse
-		return 0
-	}
+	var query string
+	if traceql.IsSQLQuery(searchRequest.Query) {
+		// TODO: normilise SQL query?
+		query = searchRequest.Query
+	} else {
+		ast, err := traceql.Parse(searchRequest.Query)
+		if err != nil { // this should never occur. if we've made this far we've already validated the query can parse. however, for sanity, just fail to cache if we can't parse
+			return 0
+		}
 
-	// forces the query into a canonical form
-	query := ast.String()
+		// forces the query into a canonical form
+		query = ast.String()
+	}
 
 	// add the query, limit and spss to the hash
 	hash := fnv1a.HashString64(query)

@@ -50,9 +50,27 @@ func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchReq
 	ctx, span := tracer.Start(ctx, "traceql.Engine.ExecuteSearch")
 	defer span.End()
 
-	rootExpr, _, _, _, fetchSpansRequest, err := Compile(searchReq.Query)
-	if err != nil {
-		return nil, err
+	// this is a very dirty trick to cut some corners
+	// TODO: do it correctly
+	var rootExpr *RootExpr
+	var fetchSpansRequest *FetchSpansRequest
+	var err error
+	if IsSQLQuery(searchReq.Query) {
+		mockQuery := "{}"
+		rootExpr, _, _, _, _, err = Compile(mockQuery)
+		if err != nil {
+			panic("Welp, something went wrong with my mock " + err.Error())
+		}
+		req, err := SQLToFetchSpansRequest(searchReq.Query)
+		if err != nil {
+			return nil, err
+		}
+		fetchSpansRequest = &req
+	} else {
+		rootExpr, _, _, _, fetchSpansRequest, err = Compile(searchReq.Query)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Check for performance testing hints

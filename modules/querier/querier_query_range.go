@@ -90,14 +90,16 @@ func (q *Querier) queryBlock(ctx context.Context, req *tempopb.QueryRangeRequest
 
 	unsafe := q.limits.UnsafeQueryHints(tenantID)
 
-	expr, err := traceql.Parse(req.Query)
-	if err != nil {
-		return nil, err
-	}
-
 	timeOverlapCutoff := q.cfg.Metrics.TimeOverlapCutoff
-	if v, ok := expr.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
-		timeOverlapCutoff = v
+
+	if !traceql.IsSQLQuery(req.Query) {
+		expr, err := traceql.Parse(req.Query)
+		if err != nil {
+			return nil, err
+		}
+		if v, ok := expr.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
+			timeOverlapCutoff = v
+		}
 	}
 
 	eval, err := traceql.NewEngine().CompileMetricsQueryRange(req, int(req.Exemplars), timeOverlapCutoff, unsafe)

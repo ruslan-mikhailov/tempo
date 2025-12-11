@@ -44,7 +44,7 @@ func (i *instance) Search(ctx context.Context, req *tempopb.SearchRequest) (*tem
 	span.AddEvent("SearchRequest", trace.WithAttributes(attribute.String("request", req.String())))
 
 	mostRecent := false
-	if len(req.Query) > 0 {
+	if len(req.Query) > 0 && !traceql.IsSQLQuery(req.Query) {
 		rootExpr, err := traceql.Parse(req.Query)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing query: %w", err)
@@ -83,6 +83,7 @@ func (i *instance) Search(ctx context.Context, req *tempopb.SearchRequest) (*tem
 			// note: we are creating new engine for each wal block,
 			// and engine.ExecuteSearch is parsing the query for each block
 			resp, err = traceql.NewEngine().ExecuteSearch(ctx, req, traceql.NewSpansetFetcherWrapper(func(ctx context.Context, req traceql.FetchSpansRequest) (traceql.FetchSpansResponse, error) {
+				fmt.Printf("\n\nFINDME spans request: %+v\n\n", req)
 				return block.Fetch(ctx, req, opts)
 			}), i.overrides.UnsafeQueryHints(i.instanceID))
 		} else {

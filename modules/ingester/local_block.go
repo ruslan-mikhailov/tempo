@@ -85,6 +85,7 @@ func (c *LocalBlock) SearchTagValuesV2(ctx context.Context, tag traceql.Attribut
 }
 
 func (c *LocalBlock) Fetch(ctx context.Context, req traceql.FetchSpansRequest, opts common.SearchOptions) (traceql.FetchSpansResponse, error) {
+	fmt.Printf("\n\nFINDME spans request: %+v\n\n", req)
 	ctx, span := tracer.Start(ctx, "LocalBlock.Fetch")
 	defer span.End()
 	return c.BackendBlock.Fetch(ctx, req, opts)

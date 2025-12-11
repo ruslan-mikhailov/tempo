@@ -296,6 +296,10 @@ func MustExtractFetchSpansRequestWithMetadata(query string) FetchSpansRequest {
 // ExtractFetchSpansRequest parses the given traceql query and returns
 // the storage layer conditions. Returns an error if the query fails to parse.
 func ExtractFetchSpansRequest(query string) (FetchSpansRequest, error) {
+	if IsSQLQuery(query) {
+		return SQLToFetchSpansRequest(query)
+	}
+
 	ast, err := Parse(query)
 	if err != nil {
 		return FetchSpansRequest{}, err
