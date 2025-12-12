@@ -5,6 +5,9 @@ package traceql
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -74,8 +77,41 @@ func SQLToFetchSpansRequest(query string) (FetchSpansRequest, error) {
 	return SQLToFetchSpansRequestHardcoded(query)
 }
 
+var (
+	translatorURL = os.Getenv("TRANSLATOR_URL")
+	endpoint      = "convert"
+)
+
 func SQLToFetchSpansRequestHTTP(query string) (FetchSpansRequest, error) {
-	panic("not implemented")
+	if translatorURL == "" {
+		return FetchSpansRequest{}, fmt.Errorf("TRANSLATOR_URL environment variable is not set")
+	}
+
+	u, err := url.Parse(translatorURL)
+	if err != nil {
+		return FetchSpansRequest{}, fmt.Errorf("parsing translator URL: %w", err)
+	}
+	u.Path = endpoint
+	queryParams := url.Values{}
+	queryParams.Add("q", query)
+	u.RawQuery = queryParams.Encode()
+
+	resp, err := http.Get(u.String())
+	if err != nil {
+		return FetchSpansRequest{}, fmt.Errorf("sending request to translator: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return FetchSpansRequest{}, fmt.Errorf("translator returned status %d", resp.StatusCode)
+	}
+
+	var jsonReq jsonFetchSpansRequest
+	if err := json.NewDecoder(resp.Body).Decode(&jsonReq); err != nil {
+		return FetchSpansRequest{}, fmt.Errorf("decoding translator response: %w", err)
+	}
+
+	return convertJSONToFetchSpansRequest(jsonReq)
 }
 
 // TODO: replace with external http call to my Rust script
