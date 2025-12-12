@@ -74,7 +74,7 @@ func IsSQLQuery(query string) bool {
 }
 
 func SQLToFetchSpansRequest(query string) (FetchSpansRequest, error) {
-	return SQLToFetchSpansRequestHardcoded(query)
+	return SQLToFetchSpansRequestHTTP(query)
 }
 
 var (
