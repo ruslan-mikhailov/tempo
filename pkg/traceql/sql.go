@@ -70,8 +70,16 @@ func IsSQLQuery(query string) bool {
 	return strings.Contains(query, "SELECT")
 }
 
-// TODO: replace with external http call to my Rust script
 func SQLToFetchSpansRequest(query string) (FetchSpansRequest, error) {
+	return SQLToFetchSpansRequestHardcoded(query)
+}
+
+func SQLToFetchSpansRequestHTTP(query string) (FetchSpansRequest, error) {
+	panic("not implemented")
+}
+
+// TODO: replace with external http call to my Rust script
+func SQLToFetchSpansRequestHardcoded(query string) (FetchSpansRequest, error) {
 	// mock implementation for now
 
 	var jsonReq jsonFetchSpansRequest
