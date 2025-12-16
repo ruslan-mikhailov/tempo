@@ -112,37 +112,39 @@ func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchReq
 
 	spansetsEvaluated := 0
 	// set up the expression evaluation as a filter to reduce data pulled
-	fetchSpansRequest.SecondPass = func(inSS *Spanset) ([]*Spanset, error) {
-		if len(inSS.Spans) == 0 {
-			return nil, nil
-		}
-
-		evalSS, err := rootExpr.Pipeline.evaluate([]*Spanset{inSS})
-		if err != nil {
-			span.RecordError(err, trace.WithAttributes(attribute.String("msg", "pipeline.evaluate")))
-			return nil, err
-		}
-
-		spansetsEvaluated++
-		if len(evalSS) == 0 {
-			return nil, nil
-		}
-
-		// reduce all evalSS to their max length to reduce meta data lookups
-		for i := range evalSS {
-			l := len(evalSS[i].Spans)
-			evalSS[i].AddAttribute(attributeMatched, NewStaticInt(l))
-
-			spansPerSpanSet := int(searchReq.SpansPerSpanSet)
-			if spansPerSpanSet == 0 {
-				spansPerSpanSet = DefaultSpansPerSpanSet
+	if fetchSpansRequest.SecondPass == nil {
+		fetchSpansRequest.SecondPass = func(inSS *Spanset) ([]*Spanset, error) {
+			if len(inSS.Spans) == 0 {
+				return nil, nil
 			}
-			if l > spansPerSpanSet {
-				evalSS[i].Spans = evalSS[i].Spans[:spansPerSpanSet]
-			}
-		}
 
-		return evalSS, nil
+			evalSS, err := rootExpr.Pipeline.evaluate([]*Spanset{inSS})
+			if err != nil {
+				span.RecordError(err, trace.WithAttributes(attribute.String("msg", "pipeline.evaluate")))
+				return nil, err
+			}
+
+			spansetsEvaluated++
+			if len(evalSS) == 0 {
+				return nil, nil
+			}
+
+			// reduce all evalSS to their max length to reduce meta data lookups
+			for i := range evalSS {
+				l := len(evalSS[i].Spans)
+				evalSS[i].AddAttribute(attributeMatched, NewStaticInt(l))
+
+				spansPerSpanSet := int(searchReq.SpansPerSpanSet)
+				if spansPerSpanSet == 0 {
+					spansPerSpanSet = DefaultSpansPerSpanSet
+				}
+				if l > spansPerSpanSet {
+					evalSS[i].Spans = evalSS[i].Spans[:spansPerSpanSet]
+				}
+			}
+
+			return evalSS, nil
+		}
 	}
 
 	fetchSpansResponse, err := spanSetFetcher.Fetch(ctx, *fetchSpansRequest)

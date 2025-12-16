@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -20,6 +21,203 @@ type jsonFetchSpansRequest struct {
 	Limit               *int            `json:"limit,omitempty"`
 	SecondPass          []jsonCondition `json:"second_pass_conditions,omitempty"`
 	SecondPassSelectAll bool            `json:"second_pass_select_all,omitempty"`
+	FilterExpression    *jsonFilterExpr `json:"filter_expression,omitempty"`
+}
+
+// ============================================================================
+// Filter Expression Tree - for evaluating SQL WHERE clause on spans
+// ============================================================================
+
+// jsonFilterExpr represents a node in the filter expression tree.
+// The Type field determines which other fields are used.
+type jsonFilterExpr struct {
+	Type string `json:"type"` // "and", "or", "not", "comparison", "exists", "true"
+
+	// For "and" and "or" types
+	Left  *jsonFilterExpr `json:"left,omitempty"`
+	Right *jsonFilterExpr `json:"right,omitempty"`
+
+	// For "not" type
+	Expression *jsonFilterExpr `json:"expression,omitempty"`
+
+	// For "comparison" type
+	Attribute *jsonAttribute `json:"attribute,omitempty"`
+	Op        string         `json:"op,omitempty"`
+	Value     *jsonStatic    `json:"value,omitempty"`
+}
+
+// evaluateFilterExpr evaluates a filter expression against a span.
+// Returns true if the span matches the filter.
+func evaluateFilterExpr(expr *jsonFilterExpr, span Span) (bool, error) {
+	if expr == nil {
+		return true, nil
+	}
+
+	switch expr.Type {
+	case "true":
+		return true, nil
+
+	case "and":
+		leftResult, err := evaluateFilterExpr(expr.Left, span)
+		if err != nil {
+			return false, err
+		}
+		if !leftResult {
+			return false, nil // short-circuit
+		}
+		return evaluateFilterExpr(expr.Right, span)
+
+	case "or":
+		leftResult, err := evaluateFilterExpr(expr.Left, span)
+		if err != nil {
+			return false, err
+		}
+		if leftResult {
+			return true, nil // short-circuit
+		}
+		return evaluateFilterExpr(expr.Right, span)
+
+	case "not":
+		result, err := evaluateFilterExpr(expr.Expression, span)
+		if err != nil {
+			return false, err
+		}
+		return !result, nil
+
+	case "exists":
+		if expr.Attribute == nil {
+			return true, nil
+		}
+		attr, err := convertJSONAttribute(*expr.Attribute)
+		if err != nil {
+			return false, err
+		}
+		_, exists := span.AttributeFor(attr)
+		return exists, nil
+
+	case "comparison":
+		if expr.Attribute == nil || expr.Value == nil {
+			return true, nil
+		}
+		return evaluateComparison(expr, span)
+
+	default:
+		return true, fmt.Errorf("unknown filter expression type: %s", expr.Type)
+	}
+}
+
+// evaluateComparison evaluates a comparison expression against a span.
+func evaluateComparison(expr *jsonFilterExpr, span Span) (bool, error) {
+	attr, err := convertJSONAttribute(*expr.Attribute)
+	if err != nil {
+		return false, err
+	}
+
+	spanValue, exists := span.AttributeFor(attr)
+	if !exists {
+		// Attribute doesn't exist - comparison fails (except for != which succeeds)
+		return expr.Op == "!=", nil
+	}
+
+	expectedValue, err := convertJSONStatic(*expr.Value)
+	if err != nil {
+		return false, err
+	}
+
+	switch expr.Op {
+	case "=":
+		return spanValue.Equals(&expectedValue), nil
+	case "!=":
+		return !spanValue.Equals(&expectedValue), nil
+	case "<":
+		return compareStatic(spanValue, expectedValue) < 0, nil
+	case "<=":
+		return compareStatic(spanValue, expectedValue) <= 0, nil
+	case ">":
+		return compareStatic(spanValue, expectedValue) > 0, nil
+	case ">=":
+		return compareStatic(spanValue, expectedValue) >= 0, nil
+	case "=~": // regex match
+		return matchRegex(spanValue, expectedValue)
+	case "!~": // regex not match
+		match, err := matchRegex(spanValue, expectedValue)
+		return !match, err
+	default:
+		return true, fmt.Errorf("unknown comparison operator: %s", expr.Op)
+	}
+}
+
+// compareStatic compares two static values.
+// Returns -1 if a < b, 0 if a == b, 1 if a > b.
+func compareStatic(a, b Static) int {
+	// Try numeric comparison first
+	aFloat := a.Float()
+	bFloat := b.Float()
+	if aFloat < bFloat {
+		return -1
+	}
+	if aFloat > bFloat {
+		return 1
+	}
+	return 0
+}
+
+// matchRegex checks if a static value matches a regex pattern.
+func matchRegex(value Static, pattern Static) (bool, error) {
+	valueStr := value.EncodeToString(false)
+	patternStr := pattern.EncodeToString(false)
+
+	re, err := regexp.Compile(patternStr)
+	if err != nil {
+		return false, fmt.Errorf("invalid regex pattern %q: %w", patternStr, err)
+	}
+
+	return re.MatchString(valueStr), nil
+}
+
+// createFilterSecondPass creates a SecondPass function that filters spans
+// using the provided filter expression.
+func createFilterSecondPass(filterExpr *jsonFilterExpr) func(*Spanset) ([]*Spanset, error) {
+	return func(inSS *Spanset) ([]*Spanset, error) {
+		if len(inSS.Spans) == 0 {
+			return nil, nil
+		}
+
+		// If no filter expression, return all spans
+		if filterExpr == nil || filterExpr.Type == "true" {
+			return []*Spanset{inSS}, nil
+		}
+
+		// Filter spans that match the expression
+		var matchingSpans []Span
+		for _, span := range inSS.Spans {
+			matches, err := evaluateFilterExpr(filterExpr, span)
+			if err != nil {
+				return nil, fmt.Errorf("evaluating filter expression: %w", err)
+			}
+			if matches {
+				matchingSpans = append(matchingSpans, span)
+			}
+		}
+
+		if len(matchingSpans) == 0 {
+			return nil, nil
+		}
+
+		// Return a new spanset with only the matching spans
+		result := &Spanset{
+			TraceID:            inSS.TraceID,
+			RootSpanName:       inSS.RootSpanName,
+			RootServiceName:    inSS.RootServiceName,
+			StartTimeUnixNanos: inSS.StartTimeUnixNanos,
+			DurationNanos:      inSS.DurationNanos,
+			ServiceStats:       inSS.ServiceStats,
+			Attributes:         inSS.Attributes,
+			Spans:              matchingSpans,
+		}
+
+		return []*Spanset{result}, nil
+	}
 }
 
 type jsonCondition struct {
@@ -154,7 +352,14 @@ func convertJSONToFetchSpansRequest(j jsonFetchSpansRequest) (FetchSpansRequest,
 	if len(req.SecondPassConditions) == 0 && !req.SecondPassSelectAll {
 		req.SecondPassConditions = SearchMetaConditions()
 	}
-	if len(req.SecondPassConditions) > 0 || req.SecondPassSelectAll {
+
+	// Use the filter expression from Rust to create the SecondPass function.
+	// This evaluates the SQL WHERE clause on each span locally without
+	// transferring span data over the network.
+	if j.FilterExpression != nil {
+		req.SecondPass = createFilterSecondPass(j.FilterExpression)
+	} else if len(req.SecondPassConditions) > 0 || req.SecondPassSelectAll {
+		// Fallback to pass-through if no filter expression
 		req.SecondPass = func(s *Spanset) ([]*Spanset, error) {
 			return []*Spanset{s}, nil
 		}
