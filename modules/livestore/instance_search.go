@@ -176,7 +176,7 @@ func (i *instance) Search(ctx context.Context, req *tempopb.SearchRequest) (*tem
 	span.AddEvent("SearchRequest", oteltrace.WithAttributes(attribute.String("request", req.String())))
 
 	mostRecent := false
-	if len(req.Query) > 0 && traceql.IsSQLQuery(req.Query) {
+	if len(req.Query) > 0 && !traceql.IsSQLQuery(req.Query) {
 		rootExpr, err := traceql.Parse(req.Query)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing query: %w", err)
