@@ -41,7 +41,7 @@ services:
       - memcached
 
   sql:
-    image: sql-to-fetchrequest:latest
+    image: sql-translator:latest
     ports:
       - 3001:3000
 
