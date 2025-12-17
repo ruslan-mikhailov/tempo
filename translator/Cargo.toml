@@ -11,3 +11,11 @@ serde_json = "1"
 thiserror = "2"
 axum = "0.7"
 
+[[bin]]
+name = "sql-to-fetchrequest"
+path = "src/main.rs"
+
+[[bin]]
+name = "sql-to-traceql"
+path = "src/sql_to_traceql.rs"
+
