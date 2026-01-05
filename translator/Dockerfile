@@ -11,12 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy manifests
 COPY Cargo.toml Cargo.lock* ./
 
-# Create dummy src to cache dependencies
-RUN mkdir src && echo "fn main() {}" > src/main.rs
-
-# Build dependencies only (this layer will be cached)
-RUN cargo build --release && rm -rf src
-
 # Copy actual source code
 COPY src ./src
 
