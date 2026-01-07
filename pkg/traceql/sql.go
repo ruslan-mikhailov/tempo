@@ -31,7 +31,7 @@ type jsonFetchSpansRequest struct {
 // jsonFilterExpr represents a node in the filter expression tree.
 // The Type field determines which other fields are used.
 type jsonFilterExpr struct {
-	Type string `json:"type"` // "and", "or", "not", "comparison", "exists", "true"
+	Type string `json:"type"` // "and", "or", "not", "comparison", "attribute_comparison", "exists", "true"
 
 	// For "and" and "or" types
 	Left  *jsonFilterExpr `json:"left,omitempty"`
@@ -40,10 +40,14 @@ type jsonFilterExpr struct {
 	// For "not" type
 	Expression *jsonFilterExpr `json:"expression,omitempty"`
 
-	// For "comparison" type
+	// For "comparison" type (attribute vs static value)
 	Attribute *jsonAttribute `json:"attribute,omitempty"`
 	Op        string         `json:"op,omitempty"`
 	Value     *jsonStatic    `json:"value,omitempty"`
+
+	// For "attribute_comparison" type (cross-attribute comparison)
+	LeftAttribute  *jsonAttribute `json:"left_attribute,omitempty"`
+	RightAttribute *jsonAttribute `json:"right_attribute,omitempty"`
 }
 
 // evaluateFilterExpr evaluates a filter expression against a span.
@@ -101,6 +105,12 @@ func evaluateFilterExpr(expr *jsonFilterExpr, span Span) (bool, error) {
 		}
 		return evaluateComparison(expr, span)
 
+	case "attribute_comparison":
+		if expr.LeftAttribute == nil || expr.RightAttribute == nil {
+			return true, nil
+		}
+		return evaluateAttributeComparison(expr, span)
+
 	default:
 		return true, fmt.Errorf("unknown filter expression type: %s", expr.Type)
 	}
@@ -141,6 +151,56 @@ func evaluateComparison(expr *jsonFilterExpr, span Span) (bool, error) {
 		return matchRegex(spanValue, expectedValue)
 	case "!~": // regex not match
 		match, err := matchRegex(spanValue, expectedValue)
+		return !match, err
+	default:
+		return true, fmt.Errorf("unknown comparison operator: %s", expr.Op)
+	}
+}
+
+// evaluateAttributeComparison evaluates a cross-attribute comparison expression against a span.
+// This compares two attribute values from the same span against each other.
+func evaluateAttributeComparison(expr *jsonFilterExpr, span Span) (bool, error) {
+	leftAttr, err := convertJSONAttribute(*expr.LeftAttribute)
+	if err != nil {
+		return false, err
+	}
+
+	rightAttr, err := convertJSONAttribute(*expr.RightAttribute)
+	if err != nil {
+		return false, err
+	}
+
+	leftValue, leftExists := span.AttributeFor(leftAttr)
+	rightValue, rightExists := span.AttributeFor(rightAttr)
+
+	// Handle cases where one or both attributes don't exist
+	if !leftExists && !rightExists {
+		// Both don't exist - they are "equal" in a sense (both nil)
+		return expr.Op == "=" || expr.Op == "<=>" || expr.Op == ">=", nil
+	}
+	if !leftExists || !rightExists {
+		// Only one exists - they are not equal
+		return expr.Op == "!=", nil
+	}
+
+	// Both attributes exist - compare their values
+	switch expr.Op {
+	case "=":
+		return leftValue.Equals(&rightValue), nil
+	case "!=":
+		return !leftValue.Equals(&rightValue), nil
+	case "<":
+		return compareStatic(leftValue, rightValue) < 0, nil
+	case "<=":
+		return compareStatic(leftValue, rightValue) <= 0, nil
+	case ">":
+		return compareStatic(leftValue, rightValue) > 0, nil
+	case ">=":
+		return compareStatic(leftValue, rightValue) >= 0, nil
+	case "=~": // regex match - left value matches pattern in right value
+		return matchRegex(leftValue, rightValue)
+	case "!~": // regex not match
+		match, err := matchRegex(leftValue, rightValue)
 		return !match, err
 	default:
 		return true, fmt.Errorf("unknown comparison operator: %s", expr.Op)

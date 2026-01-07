@@ -162,6 +162,13 @@ pub enum FilterExpression {
         op: Operator,
         value: Static,
     },
+    /// Comparison of two attributes against each other (cross-attribute comparison)
+    /// Example: span_attributes['http.method'] = span_attributes['expected.method']
+    AttributeComparison {
+        left_attribute: Attribute,
+        op: Operator,
+        right_attribute: Attribute,
+    },
     /// Check if attribute exists (is not null)
     Exists {
         attribute: Attribute,
@@ -269,6 +276,30 @@ pub enum ConversionError {
 // SQL to FetchSpansRequest Converter
 // ============================================================================
 
+/// Result of converting a binary expression - either attribute vs value or attribute vs attribute
+enum ComparisonResult {
+    /// Comparison of attribute against a static value
+    AttributeValue {
+        attribute: Attribute,
+        op: Operator,
+        value: Static,
+    },
+    /// Comparison of two attributes (cross-attribute comparison)
+    AttributeAttribute {
+        left_attribute: Attribute,
+        op: Operator,
+        right_attribute: Attribute,
+    },
+}
+
+/// Result of converting a binary expression to condition(s)
+enum ConditionResult {
+    /// Single condition (attribute vs value)
+    Single(Condition),
+    /// Two conditions for cross-attribute comparison (both fetched with OpNone)
+    CrossAttribute(Condition, Condition),
+}
+
 pub struct SqlToFetchRequestConverter {
     column_mapping: ColumnMapping,
 }
@@ -361,15 +392,29 @@ impl SqlToFetchRequestConverter {
 
             // Handle comparison operators
             Expr::BinaryExpr(binary) => {
-                if let Some((attribute, op, value)) = self.binary_to_comparison(binary)? {
-                    Ok(FilterExpression::Comparison {
+                match self.binary_to_comparison(binary)? {
+                    Some(ComparisonResult::AttributeValue {
                         attribute,
                         op,
                         value,
-                    })
-                } else {
-                    // If we can't convert, treat as always true (won't filter anything)
-                    Ok(FilterExpression::True)
+                    }) => Ok(FilterExpression::Comparison {
+                        attribute,
+                        op,
+                        value,
+                    }),
+                    Some(ComparisonResult::AttributeAttribute {
+                        left_attribute,
+                        op,
+                        right_attribute,
+                    }) => Ok(FilterExpression::AttributeComparison {
+                        left_attribute,
+                        op,
+                        right_attribute,
+                    }),
+                    None => {
+                        // If we can't convert, treat as always true (won't filter anything)
+                        Ok(FilterExpression::True)
+                    }
                 }
             }
 
@@ -526,21 +571,40 @@ impl SqlToFetchRequestConverter {
         }
     }
 
-    /// Convert a binary expression to attribute, operator, and value
+    /// Convert a binary expression to a comparison (attribute vs value or attribute vs attribute)
     fn binary_to_comparison(
         &self,
         binary: &BinaryExpr,
-    ) -> Result<Option<(Attribute, Operator, Static)>, ConversionError> {
-        // Handle both column/map_access op literal and literal op column/map_access
-        let (attr_expr, value_expr, reversed) =
-            if self.is_attribute_expr(&binary.left) && !self.is_attribute_expr(&binary.right) {
-                (&*binary.left, &*binary.right, false)
-            } else if self.is_attribute_expr(&binary.right) && !self.is_attribute_expr(&binary.left)
-            {
-                (&*binary.right, &*binary.left, true)
-            } else {
-                return Ok(None);
+    ) -> Result<Option<ComparisonResult>, ConversionError> {
+        let left_is_attr = self.is_attribute_expr(&binary.left);
+        let right_is_attr = self.is_attribute_expr(&binary.right);
+
+        // Case 1: Both sides are attributes (cross-attribute comparison)
+        if left_is_attr && right_is_attr {
+            let left_attribute = match self.expr_to_attribute(&binary.left)? {
+                Some(attr) => attr,
+                None => return Ok(None),
             };
+            let right_attribute = match self.expr_to_attribute(&binary.right)? {
+                Some(attr) => attr,
+                None => return Ok(None),
+            };
+            let op = self.map_operator(&binary.op, false)?;
+            return Ok(Some(ComparisonResult::AttributeAttribute {
+                left_attribute,
+                op,
+                right_attribute,
+            }));
+        }
+
+        // Case 2: Attribute vs literal (or literal vs attribute)
+        let (attr_expr, value_expr, reversed) = if left_is_attr && !right_is_attr {
+            (&*binary.left, &*binary.right, false)
+        } else if right_is_attr && !left_is_attr {
+            (&*binary.right, &*binary.left, true)
+        } else {
+            return Ok(None);
+        };
 
         let attribute = match self.expr_to_attribute(attr_expr)? {
             Some(attr) => attr,
@@ -554,7 +618,11 @@ impl SqlToFetchRequestConverter {
 
         let op = self.map_operator(&binary.op, reversed)?;
 
-        Ok(Some((attribute, op, value)))
+        Ok(Some(ComparisonResult::AttributeValue {
+            attribute,
+            op,
+            value,
+        }))
     }
 
     /// Create a DataFusion context with spans_view schema registered
@@ -726,17 +794,26 @@ impl SqlToFetchRequestConverter {
 
             // Handle comparison operators (=, !=, <, <=, >, >=)
             Expr::BinaryExpr(binary) => {
-                if let Some(condition) = self.binary_expr_to_condition(binary)? {
-                    // Check for time range conditions and update accordingly
-                    if let Some(col_name) = self.get_column_name(&binary.left) {
-                        if self.column_mapping.is_time_column(&col_name) {
-                            self.update_time_range(&condition, &col_name, request);
+                match self.binary_expr_to_condition(binary)? {
+                    Some(ConditionResult::Single(condition)) => {
+                        // Check for time range conditions and update accordingly
+                        if let Some(col_name) = self.get_column_name(&binary.left) {
+                            if self.column_mapping.is_time_column(&col_name) {
+                                self.update_time_range(&condition, &col_name, request);
+                            } else {
+                                request.conditions.push(condition);
+                            }
                         } else {
                             request.conditions.push(condition);
                         }
-                    } else {
-                        request.conditions.push(condition);
                     }
+                    Some(ConditionResult::CrossAttribute(left_cond, right_cond)) => {
+                        // For cross-attribute comparisons, fetch both attributes with OpNone
+                        // The actual comparison is handled by filter_expression
+                        request.conditions.push(left_cond);
+                        request.conditions.push(right_cond);
+                    }
+                    None => {}
                 }
             }
 
@@ -938,21 +1015,50 @@ impl SqlToFetchRequestConverter {
             || matches!(expr, Expr::ScalarFunction(f) if f.name() == "get_field")
     }
 
-    /// Convert a binary expression to a Condition
+    /// Convert a binary expression to Condition(s)
     fn binary_expr_to_condition(
         &self,
         binary: &BinaryExpr,
-    ) -> Result<Option<Condition>, ConversionError> {
-        // Handle both column/map_access op literal and literal op column/map_access
-        let (attr_expr, value_expr, reversed) =
-            if self.is_attribute_expr(&binary.left) && !self.is_attribute_expr(&binary.right) {
-                (&*binary.left, &*binary.right, false)
-            } else if self.is_attribute_expr(&binary.right) && !self.is_attribute_expr(&binary.left)
-            {
-                (&*binary.right, &*binary.left, true)
-            } else {
-                return Ok(None);
+    ) -> Result<Option<ConditionResult>, ConversionError> {
+        let left_is_attr = self.is_attribute_expr(&binary.left);
+        let right_is_attr = self.is_attribute_expr(&binary.right);
+
+        // Case 1: Both sides are attributes (cross-attribute comparison)
+        // Storage layer cannot optimize this, so we fetch both attributes with OpNone
+        // and let the filter_expression handle the actual comparison
+        if left_is_attr && right_is_attr {
+            let left_attribute = match self.expr_to_attribute(&binary.left)? {
+                Some(attr) => attr,
+                None => return Ok(None),
             };
+            let right_attribute = match self.expr_to_attribute(&binary.right)? {
+                Some(attr) => attr,
+                None => return Ok(None),
+            };
+
+            // Add both attributes with OpNone (fetch without filtering)
+            let left_cond = Condition {
+                attribute: left_attribute,
+                op: Operator::None,
+                operands: Vec::new(),
+            };
+            let right_cond = Condition {
+                attribute: right_attribute,
+                op: Operator::None,
+                operands: Vec::new(),
+            };
+
+            return Ok(Some(ConditionResult::CrossAttribute(left_cond, right_cond)));
+        }
+
+        // Case 2: Handle both column/map_access op literal and literal op column/map_access
+        let (attr_expr, value_expr, reversed) = if left_is_attr && !right_is_attr {
+            (&*binary.left, &*binary.right, false)
+        } else if right_is_attr && !left_is_attr {
+            (&*binary.right, &*binary.left, true)
+        } else {
+            return Ok(None);
+        };
 
         // Extract attribute from column or map access
         let attribute = match self.expr_to_attribute(attr_expr)? {
@@ -969,11 +1075,11 @@ impl SqlToFetchRequestConverter {
         // Map DataFusion operator to Tempo operator (reverse if needed)
         let op = self.map_operator(&binary.op, reversed)?;
 
-        Ok(Some(Condition {
+        Ok(Some(ConditionResult::Single(Condition {
             attribute,
             op,
             operands: vec![operand],
-        }))
+        })))
     }
 
     /// Map DataFusion operator to Tempo operator
@@ -1559,5 +1665,181 @@ mod tests {
             FilterExpression::True => {}
             other => panic!("Expected True expression for no WHERE clause, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_cross_attribute_comparison() {
+        let sql = r#"
+            SELECT traceid, span_attributes['http.request.method'], span_attributes['expected.method']
+            FROM spans_view
+            WHERE span_attributes['http.request.method'] = span_attributes['expected.method']
+        "#;
+
+        let converter = SqlToFetchRequestConverter::new();
+        let request = converter.convert(sql).await.unwrap();
+
+        // Should have filter expression with AttributeComparison
+        assert!(request.filter_expression.is_some());
+        let expr = request.filter_expression.unwrap();
+
+        match expr {
+            FilterExpression::AttributeComparison {
+                left_attribute,
+                op,
+                right_attribute,
+            } => {
+                assert_eq!(left_attribute.name, "http.request.method");
+                assert_eq!(left_attribute.scope, AttributeScope::Span);
+                assert_eq!(op, Operator::Equal);
+                assert_eq!(right_attribute.name, "expected.method");
+                assert_eq!(right_attribute.scope, AttributeScope::Span);
+            }
+            other => panic!(
+                "Expected AttributeComparison expression, got {:?}",
+                other
+            ),
+        }
+
+        // Should have two conditions with OpNone for fetching both attributes
+        assert_eq!(request.conditions.len(), 2);
+        assert_eq!(request.conditions[0].op, Operator::None);
+        assert_eq!(request.conditions[1].op, Operator::None);
+
+        // Verify the attribute names
+        let attr_names: Vec<&str> = request
+            .conditions
+            .iter()
+            .map(|c| c.attribute.name.as_str())
+            .collect();
+        assert!(attr_names.contains(&"http.request.method"));
+        assert!(attr_names.contains(&"expected.method"));
+    }
+
+    #[tokio::test]
+    async fn test_cross_attribute_comparison_not_equal() {
+        let sql = r#"
+            SELECT traceid
+            FROM spans_view
+            WHERE span_attributes['user.id'] != span_attributes['owner.id']
+        "#;
+
+        let converter = SqlToFetchRequestConverter::new();
+        let request = converter.convert(sql).await.unwrap();
+
+        // Should have filter expression with AttributeComparison
+        assert!(request.filter_expression.is_some());
+        let expr = request.filter_expression.unwrap();
+
+        match expr {
+            FilterExpression::AttributeComparison {
+                left_attribute,
+                op,
+                right_attribute,
+            } => {
+                assert_eq!(left_attribute.name, "user.id");
+                assert_eq!(op, Operator::NotEqual);
+                assert_eq!(right_attribute.name, "owner.id");
+            }
+            other => panic!(
+                "Expected AttributeComparison expression, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cross_attribute_comparison_with_column() {
+        let sql = r#"
+            SELECT traceid
+            FROM spans_view
+            WHERE http_method = span_attributes['expected.method']
+        "#;
+
+        let converter = SqlToFetchRequestConverter::new();
+        let request = converter.convert(sql).await.unwrap();
+
+        // Should have filter expression with AttributeComparison
+        assert!(request.filter_expression.is_some());
+        let expr = request.filter_expression.unwrap();
+
+        match expr {
+            FilterExpression::AttributeComparison {
+                left_attribute,
+                op,
+                right_attribute,
+            } => {
+                // http_method becomes http.method in span scope
+                assert_eq!(left_attribute.name, "http.method");
+                assert_eq!(op, Operator::Equal);
+                assert_eq!(right_attribute.name, "expected.method");
+            }
+            other => panic!(
+                "Expected AttributeComparison expression, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cross_attribute_with_and() {
+        let sql = r#"
+            SELECT traceid
+            FROM spans_view
+            WHERE span_attributes['attr1'] = span_attributes['attr2']
+              AND http_status_code = 200
+        "#;
+
+        let converter = SqlToFetchRequestConverter::new();
+        let request = converter.convert(sql).await.unwrap();
+
+        // Should have filter expression that is an AND
+        assert!(request.filter_expression.is_some());
+        let expr = request.filter_expression.unwrap();
+
+        match expr {
+            FilterExpression::And { left, right } => {
+                // Left should be the attribute comparison
+                match *left {
+                    FilterExpression::AttributeComparison { left_attribute, op, right_attribute } => {
+                        assert_eq!(left_attribute.name, "attr1");
+                        assert_eq!(op, Operator::Equal);
+                        assert_eq!(right_attribute.name, "attr2");
+                    }
+                    _ => panic!("Expected AttributeComparison on left side of AND"),
+                }
+                // Right should be a regular comparison
+                match *right {
+                    FilterExpression::Comparison { attribute, op, .. } => {
+                        assert_eq!(attribute.name, "http.status.code");
+                        assert_eq!(op, Operator::Equal);
+                    }
+                    _ => panic!("Expected Comparison on right side of AND"),
+                }
+            }
+            _ => panic!("Expected AND expression"),
+        }
+
+        // Should have 3 conditions: 2 for cross-attribute (OpNone) + 1 for regular comparison
+        assert_eq!(request.conditions.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_cross_attribute_serialization() {
+        let sql = r#"
+            SELECT traceid
+            FROM spans_view
+            WHERE span_attributes['method'] = span_attributes['expected']
+        "#;
+
+        let converter = SqlToFetchRequestConverter::new();
+        let request = converter.convert(sql).await.unwrap();
+
+        // Serialize to JSON and check the structure
+        let json = serde_json::to_string_pretty(&request).unwrap();
+
+        // Should contain attribute_comparison type
+        assert!(json.contains("attribute_comparison"));
+        assert!(json.contains("left_attribute"));
+        assert!(json.contains("right_attribute"));
     }
 }
