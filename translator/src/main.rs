@@ -338,7 +338,14 @@ impl SqlToFetchRequestConverter {
         let ctx = self.create_context()?;
 
         // Parse SQL to logical plan
-        let plan = ctx.state().create_logical_plan(sql).await?;
+        let unoptimized_plan = ctx.state().create_logical_plan(sql).await?;
+
+        // Run the optimizer to:
+        // - Flatten nested subqueries
+        // - Push down and merge predicates
+        // - Simplify expressions
+        // - Apply other optimization rules
+        let plan = ctx.state().optimize(&unoptimized_plan)?;
 
         // Detect JOIN information first
         let join_info = self.detect_join_info(&plan);
