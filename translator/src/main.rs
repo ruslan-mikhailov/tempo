@@ -8,7 +8,8 @@ use axum::{
 use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
 use datafusion::common::{DFSchema, ScalarValue};
 use datafusion::logical_expr::expr::InList;
-use datafusion::logical_expr::{BinaryExpr, Expr, LogicalPlan, Operator as DFOperator};
+use datafusion::logical_expr::{BinaryExpr, Expr, JoinType, LogicalPlan, Operator as DFOperator};
+use std::collections::HashSet;
 use datafusion::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -300,6 +301,17 @@ enum ConditionResult {
     CrossAttribute(Condition, Condition),
 }
 
+/// Information about JOINs detected in the query
+#[derive(Debug, Clone, Default)]
+struct JoinInfo {
+    /// Whether a JOIN was detected
+    has_join: bool,
+    /// The type of JOIN (Inner, Full, Left, Right)
+    join_type: Option<JoinType>,
+    /// Whether the JOIN is on traceid (trace-level correlation)
+    is_traceid_join: bool,
+}
+
 pub struct SqlToFetchRequestConverter {
     column_mapping: ColumnMapping,
 }
@@ -328,20 +340,91 @@ impl SqlToFetchRequestConverter {
         // Parse SQL to logical plan
         let plan = ctx.state().create_logical_plan(sql).await?;
 
+        // Detect JOIN information first
+        let join_info = self.detect_join_info(&plan);
+
         // Extract components from the plan
         let mut request = FetchSpansRequest::default();
-        self.extract_from_plan(&plan, &mut request)?;
+        self.extract_from_plan(&plan, &mut request, &join_info)?;
 
         // Extract filter expression tree for Go-side evaluation
-        request.filter_expression = self.extract_filter_expression(&plan)?;
+        request.filter_expression = self.extract_filter_expression(&plan, &join_info)?;
+
+        // For trace-level JOINs, set all_conditions = false
+        // This allows the storage layer to return spans matching ANY condition,
+        // and the filter_expression handles the trace-level logic
+        if join_info.is_traceid_join {
+            request.all_conditions = false;
+        }
+
+        // Deduplicate conditions
+        self.deduplicate_conditions(&mut request);
 
         Ok(request)
+    }
+
+    /// Detect JOIN information from the logical plan
+    fn detect_join_info(&self, plan: &LogicalPlan) -> JoinInfo {
+        let mut info = JoinInfo::default();
+        self.detect_join_info_recursive(plan, &mut info);
+        info
+    }
+
+    fn detect_join_info_recursive(&self, plan: &LogicalPlan, info: &mut JoinInfo) {
+        match plan {
+            LogicalPlan::Join(join) => {
+                info.has_join = true;
+                info.join_type = Some(join.join_type.clone());
+
+                // Check if the join is on traceid
+                if let Some(ref on) = join.on.first() {
+                    let left_col = format!("{}", on.0);
+                    let right_col = format!("{}", on.1);
+                    if left_col.to_lowercase().contains("traceid")
+                        || right_col.to_lowercase().contains("traceid")
+                    {
+                        info.is_traceid_join = true;
+                    }
+                }
+
+                // Also check filter condition for traceid
+                if let Some(ref filter) = join.filter {
+                    let filter_str = format!("{}", filter);
+                    if filter_str.to_lowercase().contains("traceid") {
+                        info.is_traceid_join = true;
+                    }
+                }
+            }
+            _ => {
+                for input in plan.inputs() {
+                    self.detect_join_info_recursive(input, info);
+                }
+            }
+        }
+    }
+
+    /// Deduplicate conditions in the request
+    fn deduplicate_conditions(&self, request: &mut FetchSpansRequest) {
+        // Deduplicate main conditions
+        let mut seen: HashSet<String> = HashSet::new();
+        request.conditions.retain(|c| {
+            let key = format!("{:?}:{:?}:{:?}", c.attribute.name, c.op, c.operands);
+            seen.insert(key)
+        });
+
+        // Deduplicate second_pass_conditions
+        seen.clear();
+        request.second_pass_conditions.retain(|c| {
+            let key = format!("{:?}:{:?}:{:?}", c.attribute.name, c.op, c.operands);
+            seen.insert(key)
+        });
     }
 
     /// Extract filter expression tree from the logical plan
     fn extract_filter_expression(
         &self,
         plan: &LogicalPlan,
+        join_info: &JoinInfo,
     ) -> Result<Option<FilterExpression>, ConversionError> {
         match plan {
             LogicalPlan::Filter(filter) => {
@@ -349,20 +432,106 @@ impl SqlToFetchRequestConverter {
                 let expr = self.expr_to_filter_expression(&filter.predicate)?;
                 Ok(Some(expr))
             }
-            LogicalPlan::Projection(proj) => self.extract_filter_expression(&proj.input),
-            LogicalPlan::Limit(limit) => self.extract_filter_expression(&limit.input),
-            LogicalPlan::Sort(sort) => self.extract_filter_expression(&sort.input),
+            LogicalPlan::Projection(proj) => {
+                self.extract_filter_expression(&proj.input, join_info)
+            }
+            LogicalPlan::Limit(limit) => self.extract_filter_expression(&limit.input, join_info),
+            LogicalPlan::Sort(sort) => self.extract_filter_expression(&sort.input, join_info),
             LogicalPlan::TableScan(_) => Ok(Some(FilterExpression::True)),
+            LogicalPlan::SubqueryAlias(alias) => {
+                // Handle CTEs - traverse into the subquery
+                self.extract_filter_expression(&alias.input, join_info)
+            }
+            LogicalPlan::Join(join) => {
+                // Extract filter expressions from both sides of the JOIN
+                let left_expr = self.extract_filter_expression(&join.left, join_info)?;
+                let right_expr = self.extract_filter_expression(&join.right, join_info)?;
+
+                // Combine based on join type
+                match (left_expr, right_expr) {
+                    (Some(left), Some(right)) => {
+                        // Skip True expressions when combining
+                        let left_is_true = matches!(left, FilterExpression::True);
+                        let right_is_true = matches!(right, FilterExpression::True);
+
+                        if left_is_true && right_is_true {
+                            return Ok(Some(FilterExpression::True));
+                        }
+                        if left_is_true {
+                            return Ok(Some(right));
+                        }
+                        if right_is_true {
+                            return Ok(Some(left));
+                        }
+
+                        // Combine based on JOIN type for trace-level semantics
+                        let combined = match join.join_type {
+                            JoinType::Inner => {
+                                // INNER JOIN on traceid = trace-level AND
+                                // Both conditions must exist (possibly on different spans)
+                                FilterExpression::And {
+                                    left: Box::new(left),
+                                    right: Box::new(right),
+                                }
+                            }
+                            JoinType::Full => {
+                                // FULL OUTER JOIN = trace-level OR
+                                // Either condition can exist
+                                FilterExpression::Or {
+                                    left: Box::new(left),
+                                    right: Box::new(right),
+                                }
+                            }
+                            JoinType::Left => {
+                                // LEFT JOIN = left required, right optional
+                                // For trace semantics: return traces matching left condition,
+                                // with optional enrichment from right
+                                left
+                            }
+                            JoinType::Right => {
+                                // RIGHT JOIN = right required, left optional
+                                // For trace semantics: return traces matching right condition
+                                right
+                            }
+                            _ => {
+                                // Default to AND for other join types
+                                FilterExpression::And {
+                                    left: Box::new(left),
+                                    right: Box::new(right),
+                                }
+                            }
+                        };
+                        Ok(Some(combined))
+                    }
+                    (Some(expr), None) | (None, Some(expr)) => Ok(Some(expr)),
+                    (None, None) => Ok(Some(FilterExpression::True)),
+                }
+            }
             _ => {
-                // Recursively search in inputs
+                // Recursively search in inputs and combine all filter expressions found
+                let mut expressions: Vec<FilterExpression> = Vec::new();
+
                 for input in plan.inputs() {
-                    if let Some(expr) = self.extract_filter_expression(input)? {
+                    if let Some(expr) = self.extract_filter_expression(input, join_info)? {
                         if !matches!(expr, FilterExpression::True) {
-                            return Ok(Some(expr));
+                            expressions.push(expr);
                         }
                     }
                 }
-                Ok(Some(FilterExpression::True))
+
+                if expressions.is_empty() {
+                    return Ok(Some(FilterExpression::True));
+                }
+
+                // Combine multiple expressions with AND (default behavior)
+                let result = expressions
+                    .into_iter()
+                    .reduce(|acc, expr| FilterExpression::And {
+                        left: Box::new(acc),
+                        right: Box::new(expr),
+                    });
+
+                Ok(result.or(Some(FilterExpression::True)))
             }
         }
     }
@@ -708,17 +877,18 @@ impl SqlToFetchRequestConverter {
         &self,
         plan: &LogicalPlan,
         request: &mut FetchSpansRequest,
+        join_info: &JoinInfo,
     ) -> Result<(), ConversionError> {
         match plan {
             LogicalPlan::Projection(proj) => {
                 // Extract SELECT columns for second_pass_conditions
                 self.extract_projections(&proj.expr, request)?;
-                self.extract_from_plan(&proj.input, request)?;
+                self.extract_from_plan(&proj.input, request, join_info)?;
             }
             LogicalPlan::Filter(filter) => {
                 // Extract WHERE conditions
                 self.extract_filter_conditions(&filter.predicate, request)?;
-                self.extract_from_plan(&filter.input, request)?;
+                self.extract_from_plan(&filter.input, request, join_info)?;
             }
             LogicalPlan::Limit(limit) => {
                 // Extract LIMIT
@@ -730,19 +900,28 @@ impl SqlToFetchRequestConverter {
                         request.limit = Some(*n as usize);
                     }
                 }
-                self.extract_from_plan(&limit.input, request)?;
+                self.extract_from_plan(&limit.input, request, join_info)?;
             }
             LogicalPlan::Sort(sort) => {
                 // Skip sort, continue to input
-                self.extract_from_plan(&sort.input, request)?;
+                self.extract_from_plan(&sort.input, request, join_info)?;
             }
             LogicalPlan::TableScan(_) => {
                 // Base case - we've reached the table
             }
+            LogicalPlan::SubqueryAlias(alias) => {
+                // Handle CTEs - traverse into the subquery
+                self.extract_from_plan(&alias.input, request, join_info)?;
+            }
+            LogicalPlan::Join(join) => {
+                // Process both sides of the JOIN
+                self.extract_from_plan(&join.left, request, join_info)?;
+                self.extract_from_plan(&join.right, request, join_info)?;
+            }
             _ => {
                 // Recursively process other plan nodes
                 for input in plan.inputs() {
-                    self.extract_from_plan(input, request)?;
+                    self.extract_from_plan(input, request, join_info)?;
                 }
             }
         }
@@ -1843,3 +2022,4 @@ mod tests {
         assert!(json.contains("right_attribute"));
     }
 }
+
