@@ -72,6 +72,13 @@ func (m *mockSpan) ChildOf([]traceql.Span, []traceql.Span, bool, bool, bool, []t
 	return nil
 }
 
+func (m *mockSpan) MatchedGroups() uint64 {
+	return 0
+}
+
+func (m *mockSpan) SetMatchedGroups(_ uint64) {
+}
+
 type mockFetcher struct {
 	filter   traceql.SecondPassFn
 	Spansets []*traceql.Spanset

@@ -21,6 +21,7 @@ import (
 	"github.com/grafana/tempo/tempodb/backend/local"
 	"github.com/grafana/tempo/tempodb/encoding/common"
 	"github.com/grafana/tempo/tempodb/encoding/vparquet4"
+	"github.com/grafana/tempo/tempodb/encoding/vparquet5"
 	"github.com/grafana/tempo/tempodb/wal"
 	"github.com/stretchr/testify/require"
 )
@@ -1057,4 +1058,375 @@ func filterTimeSeriesByLabel(ts []*tempopb.TimeSeries, labelName string) []*temp
 		}
 	}
 	return targetTs
+}
+
+// TestTempoDBBatchQueryRange tests the batch metrics query functionality.
+// This test uses vparquet5 which fully supports the MatchedGroups feature.
+func TestTempoDBBatchQueryRange(t *testing.T) {
+	var (
+		tempDir      = t.TempDir()
+		blockVersion = vparquet5.VersionString
+	)
+
+	dc := backend.DedicatedColumns{
+		{Scope: "resource", Name: "res-dedicated.01", Type: "string"},
+		{Scope: "span", Name: "span-dedicated.01", Type: "string"},
+	}
+	r, w, _, err := New(&Config{
+		Backend: backend.Local,
+		Local: &local.Config{
+			Path: path.Join(tempDir, "traces"),
+		},
+		Block: &common.BlockConfig{
+			BloomFP:             .01,
+			BloomShardSizeBytes: 100_000,
+			Version:             blockVersion,
+			RowGroupSizeBytes:   10000,
+			DedicatedColumns:    dc,
+		},
+		WAL: &wal.Config{
+			Filepath:       path.Join(tempDir, "wal"),
+			IngestionSlack: time.Since(time.Time{}),
+		},
+		Search: &SearchConfig{
+			ChunkSizeBytes:  1_000_000,
+			ReadBufferCount: 8, ReadBufferSizeBytes: 4 * 1024 * 1024,
+		},
+		BlocklistPoll: 0,
+	}, nil, log.NewNopLogger())
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	r.EnablePolling(ctx, &mockJobSharder{}, false)
+
+	// Write to wal
+	wal := w.WAL()
+
+	meta := &backend.BlockMeta{BlockID: backend.NewUUID(), TenantID: testTenantID, DedicatedColumns: dc}
+	head, err := wal.NewBlock(meta, model.CurrentEncoding)
+	require.NoError(t, err)
+	dec := model.MustNewSegmentDecoder(model.CurrentEncoding)
+
+	totalSpans := 50
+	for i := 1; i <= totalSpans; i++ {
+		tid := test.ValidTraceID(nil)
+
+		sp := test.MakeSpan(tid)
+
+		// Start time is i seconds
+		sp.StartTimeUnixNano = uint64(i * int(time.Second))
+
+		// Duration is i seconds
+		sp.EndTimeUnixNano = sp.StartTimeUnixNano + uint64(i*int(time.Second))
+
+		// Service name
+		var svcName string
+		if i%2 == 0 {
+			svcName = "even"
+		} else {
+			svcName = "odd"
+		}
+
+		tr := &tempopb.Trace{
+			ResourceSpans: []*v1.ResourceSpans{
+				{
+					Resource: &resource_v1.Resource{
+						Attributes: []*common_v1.KeyValue{tempopb.MakeKeyValueStringPtr("service.name", svcName)},
+					},
+					ScopeSpans: []*v1.ScopeSpans{
+						{
+							Spans: []*v1.Span{
+								sp,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		b1, err := dec.PrepareForWrite(tr, 0, 0)
+		require.NoError(t, err)
+
+		b2, err := dec.ToObject([][]byte{b1})
+		require.NoError(t, err)
+		err = head.Append(tid, b2, 0, 0, true)
+		require.NoError(t, err)
+	}
+
+	// Complete block
+	block, err := w.CompleteBlock(context.Background(), head)
+	require.NoError(t, err)
+
+	f := traceql.NewSpansetFetcherWrapper(func(ctx context.Context, req traceql.FetchSpansRequest) (traceql.FetchSpansResponse, error) {
+		return block.Fetch(ctx, req, common.DefaultSearchOptions())
+	})
+
+	t.Run("basic_batch_query", func(t *testing.T) {
+		// Test batch query with two fragments:
+		// Fragment 1: only even service spans (25 spans)
+		// Fragment 2: all spans (50 spans)
+		req := &tempopb.QueryRangeRequest{
+			Start: 1,
+			End:   50 * uint64(time.Second),
+			Step:  50 * uint64(time.Second),
+			Query: `{} | count_over_time()`, // Not used directly, but needed for request validation
+		}
+
+		queries := []string{
+			`{ .service.name="even" } | count_over_time()`,
+			`{ } | count_over_time()`,
+		}
+
+		e := traceql.NewEngine()
+		eval, err := e.CompileBatchMetricsQueryRange(req, queries, 0, 0, false)
+		require.NoError(t, err)
+
+		err = eval.Do(ctx, f, 0, 0, 0)
+		require.NoError(t, err)
+
+		actual := eval.Results().ToProto(req)
+		sortTimeSeries(actual)
+
+		// Should have 2 time series, one for each fragment
+		require.Len(t, actual, 2, "Expected 2 time series (one per fragment)")
+
+		// Verify each series has the _meta_query_fragment label
+		for _, ts := range actual {
+			found := false
+			for _, l := range ts.Labels {
+				if l.Key == "_meta_query_fragment" {
+					found = true
+					break
+				}
+			}
+			require.True(t, found, "Expected _meta_query_fragment label in series")
+		}
+
+		// Find series by fragment
+		var evenSeries, allSeries *tempopb.TimeSeries
+		for _, ts := range actual {
+			for _, l := range ts.Labels {
+				if l.Key == "_meta_query_fragment" {
+					if l.Value.GetStringValue() == `{ .service.name="even" } | count_over_time()` {
+						evenSeries = ts
+					} else if l.Value.GetStringValue() == `{ } | count_over_time()` {
+						allSeries = ts
+					}
+				}
+			}
+		}
+
+		require.NotNil(t, evenSeries, "Expected series for even service filter")
+		require.NotNil(t, allSeries, "Expected series for all spans filter")
+
+		// Verify count values
+		// Even spans: 25 (2, 4, 6, ..., 50)
+		// All spans: 50
+		require.Len(t, evenSeries.Samples, 1)
+		require.Len(t, allSeries.Samples, 1)
+		require.InDelta(t, 25.0, evenSeries.Samples[0].Value, 0.1, "Expected 25 even spans")
+		require.InDelta(t, 50.0, allSeries.Samples[0].Value, 0.1, "Expected 50 total spans")
+	})
+
+	t.Run("overlapping_matches", func(t *testing.T) {
+		// Test that spans matching multiple fragments are counted in both
+		req := &tempopb.QueryRangeRequest{
+			Start: 1,
+			End:   50 * uint64(time.Second),
+			Step:  50 * uint64(time.Second),
+			Query: `{} | count_over_time()`,
+		}
+
+		queries := []string{
+			`{ .service.name="even" } | count_over_time()`,
+			`{ .service.name="odd" } | count_over_time()`,
+			`{ } | count_over_time()`,
+		}
+
+		e := traceql.NewEngine()
+		eval, err := e.CompileBatchMetricsQueryRange(req, queries, 0, 0, false)
+		require.NoError(t, err)
+
+		err = eval.Do(ctx, f, 0, 0, 0)
+		require.NoError(t, err)
+
+		actual := eval.Results().ToProto(req)
+		require.Len(t, actual, 3, "Expected 3 time series")
+
+		// Sum of even + odd should equal total
+		var evenCount, oddCount, totalCount float64
+		for _, ts := range actual {
+			for _, l := range ts.Labels {
+				if l.Key == "_meta_query_fragment" {
+					switch l.Value.GetStringValue() {
+					case `{ .service.name="even" } | count_over_time()`:
+						evenCount = ts.Samples[0].Value
+					case `{ .service.name="odd" } | count_over_time()`:
+						oddCount = ts.Samples[0].Value
+					case `{ } | count_over_time()`:
+						totalCount = ts.Samples[0].Value
+					}
+				}
+			}
+		}
+
+		require.InDelta(t, 25.0, evenCount, 0.1)
+		require.InDelta(t, 25.0, oddCount, 0.1)
+		require.InDelta(t, 50.0, totalCount, 0.1)
+		require.InDelta(t, totalCount, evenCount+oddCount, 0.1, "even + odd should equal total")
+	})
+
+	t.Run("validation_errors", func(t *testing.T) {
+		req := &tempopb.QueryRangeRequest{
+			Start: 1,
+			End:   50 * uint64(time.Second),
+			Step:  50 * uint64(time.Second),
+			Query: `{} | count_over_time()`,
+		}
+
+		e := traceql.NewEngine()
+
+		// Test: empty queries
+		_, err := e.CompileBatchMetricsQueryRange(req, []string{}, 0, 0, false)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "at least one query required")
+
+		// Test: non-metrics query
+		_, err = e.CompileBatchMetricsQueryRange(req, []string{`{ .service.name="test" }`}, 0, 0, false)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "not a metrics query")
+
+		// Test: invalid query syntax
+		_, err = e.CompileBatchMetricsQueryRange(req, []string{`{ invalid }`}, 0, 0, false)
+		require.Error(t, err)
+	})
+}
+
+// TestTempoDBBatchQueryRangeFallback tests that batch queries work correctly
+// with vparquet4 which returns 0 for MatchedGroups (fallback evaluation).
+func TestTempoDBBatchQueryRangeFallback(t *testing.T) {
+	var (
+		tempDir      = t.TempDir()
+		blockVersion = vparquet4.VersionString // Use vparquet4 which has stub MatchedGroups
+	)
+
+	r, w, _, err := New(&Config{
+		Backend: backend.Local,
+		Local: &local.Config{
+			Path: path.Join(tempDir, "traces"),
+		},
+		Block: &common.BlockConfig{
+			BloomFP:             .01,
+			BloomShardSizeBytes: 100_000,
+			Version:             blockVersion,
+			RowGroupSizeBytes:   10000,
+		},
+		WAL: &wal.Config{
+			Filepath:       path.Join(tempDir, "wal"),
+			IngestionSlack: time.Since(time.Time{}),
+		},
+		Search: &SearchConfig{
+			ChunkSizeBytes:  1_000_000,
+			ReadBufferCount: 8, ReadBufferSizeBytes: 4 * 1024 * 1024,
+		},
+		BlocklistPoll: 0,
+	}, nil, log.NewNopLogger())
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	r.EnablePolling(ctx, &mockJobSharder{}, false)
+
+	wal := w.WAL()
+
+	meta := &backend.BlockMeta{BlockID: backend.NewUUID(), TenantID: testTenantID}
+	head, err := wal.NewBlock(meta, model.CurrentEncoding)
+	require.NoError(t, err)
+	dec := model.MustNewSegmentDecoder(model.CurrentEncoding)
+
+	totalSpans := 20
+	for i := 1; i <= totalSpans; i++ {
+		tid := test.ValidTraceID(nil)
+		sp := test.MakeSpan(tid)
+		sp.StartTimeUnixNano = uint64(i * int(time.Second))
+		sp.EndTimeUnixNano = sp.StartTimeUnixNano + uint64(i*int(time.Second))
+
+		var svcName string
+		if i%2 == 0 {
+			svcName = "even"
+		} else {
+			svcName = "odd"
+		}
+
+		tr := &tempopb.Trace{
+			ResourceSpans: []*v1.ResourceSpans{
+				{
+					Resource: &resource_v1.Resource{
+						Attributes: []*common_v1.KeyValue{tempopb.MakeKeyValueStringPtr("service.name", svcName)},
+					},
+					ScopeSpans: []*v1.ScopeSpans{
+						{
+							Spans: []*v1.Span{sp},
+						},
+					},
+				},
+			},
+		}
+
+		b1, err := dec.PrepareForWrite(tr, 0, 0)
+		require.NoError(t, err)
+
+		b2, err := dec.ToObject([][]byte{b1})
+		require.NoError(t, err)
+		err = head.Append(tid, b2, 0, 0, true)
+		require.NoError(t, err)
+	}
+
+	block, err := w.CompleteBlock(context.Background(), head)
+	require.NoError(t, err)
+
+	f := traceql.NewSpansetFetcherWrapper(func(ctx context.Context, req traceql.FetchSpansRequest) (traceql.FetchSpansResponse, error) {
+		return block.Fetch(ctx, req, common.DefaultSearchOptions())
+	})
+
+	// Test that fallback works - vparquet4 returns 0 for MatchedGroups,
+	// so the evaluator should fall back to direct filter evaluation
+	req := &tempopb.QueryRangeRequest{
+		Start: 1,
+		End:   20 * uint64(time.Second),
+		Step:  20 * uint64(time.Second),
+		Query: `{} | count_over_time()`,
+	}
+
+	queries := []string{
+		`{ .service.name="even" } | count_over_time()`,
+		`{ } | count_over_time()`,
+	}
+
+	e := traceql.NewEngine()
+	eval, err := e.CompileBatchMetricsQueryRange(req, queries, 0, 0, false)
+	require.NoError(t, err)
+
+	err = eval.Do(ctx, f, 0, 0, 0)
+	require.NoError(t, err)
+
+	actual := eval.Results().ToProto(req)
+	require.Len(t, actual, 2, "Expected 2 time series with fallback evaluation")
+
+	// Verify counts are correct even with fallback
+	var evenCount, totalCount float64
+	for _, ts := range actual {
+		for _, l := range ts.Labels {
+			if l.Key == "_meta_query_fragment" {
+				switch l.Value.GetStringValue() {
+				case `{ .service.name="even" } | count_over_time()`:
+					evenCount = ts.Samples[0].Value
+				case `{ } | count_over_time()`:
+					totalCount = ts.Samples[0].Value
+				}
+			}
+		}
+	}
+
+	require.InDelta(t, 10.0, evenCount, 0.1, "Expected 10 even spans")
+	require.InDelta(t, 20.0, totalCount, 0.1, "Expected 20 total spans")
 }

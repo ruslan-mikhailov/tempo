@@ -62,6 +62,11 @@ type span struct {
 	rowNum         parquetquery.RowNumber
 	cbSpansetFinal bool
 	cbSpanset      *traceql.Spanset
+
+	// matchedGroups is a bitmap of condition group indices this span matched.
+	// Set by the SecondPass callback during batch metrics query evaluation.
+	// Bit i is set if the span matched group i.
+	matchedGroups uint64
 }
 
 func (s *span) Release() {
@@ -296,6 +301,14 @@ func (s *span) StartTimeUnixNanos() uint64 {
 
 func (s *span) DurationNanos() uint64 {
 	return s.durationNanos
+}
+
+func (s *span) MatchedGroups() uint64 {
+	return s.matchedGroups
+}
+
+func (s *span) SetMatchedGroups(groups uint64) {
+	s.matchedGroups = groups
 }
 
 func (s *span) DescendantOf(lhs, rhs []traceql.Span, falseForAll, invert, union bool, buffer []traceql.Span) []traceql.Span {
@@ -844,6 +857,7 @@ func putSpan(s *span) {
 	s.nestedSetParent = 0
 	s.nestedSetLeft = 0
 	s.nestedSetRight = 0
+	s.matchedGroups = 0
 	s.spanAttrs = s.spanAttrs[:0]
 	s.resourceAttrs = s.resourceAttrs[:0]
 	s.traceAttrs = s.traceAttrs[:0]

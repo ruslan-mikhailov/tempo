@@ -186,6 +186,16 @@ type Span interface {
 	// the relationship. If invert is true then this will behave like "ParentOf". buffer is an optional
 	// buffer to use to avoid allocations.
 	ChildOf(lhs []Span, rhs []Span, falseForAll bool, invert bool, union bool, buffer []Span) []Span
+
+	// MatchedGroups returns a bitmap of condition group indices this span matched.
+	// Bit i is set if the span matched group i. Used for batch metrics queries.
+	// Returns 0 if not set or not supported by the storage implementation.
+	MatchedGroups() uint64
+
+	// SetMatchedGroups sets the bitmap of condition group indices this span matched.
+	// Used by the SecondPass callback during batch metrics query evaluation.
+	// May be a no-op for storage implementations that don't support it.
+	SetMatchedGroups(groups uint64)
 }
 
 // should we just make matched a field on the spanset instead of a special attribute?

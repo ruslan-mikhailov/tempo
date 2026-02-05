@@ -194,6 +194,17 @@ func (s *span) DurationNanos() uint64 {
 	return s.durationNanos
 }
 
+// MatchedGroups returns 0 as vparquet3 does not support batch metrics query tagging.
+// This is a stub implementation to satisfy the traceql.Span interface.
+func (s *span) MatchedGroups() uint64 {
+	return 0
+}
+
+// SetMatchedGroups is a no-op as vparquet3 does not support batch metrics query tagging.
+// This is a stub implementation to satisfy the traceql.Span interface.
+func (s *span) SetMatchedGroups(_ uint64) {
+}
+
 func (s *span) DescendantOf(lhs []traceql.Span, rhs []traceql.Span, falseForAll bool, invert bool, union bool, buffer []traceql.Span) []traceql.Span {
 	if len(lhs) == 0 && len(rhs) == 0 {
 		return nil

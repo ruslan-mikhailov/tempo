@@ -999,6 +999,13 @@ func (m *mockSpan) ChildOf(lhs []Span, rhs []Span, falseForAll bool, invert bool
 	return loop(lhs, rhs, falseForAll, invert, childOf)
 }
 
+func (m *mockSpan) MatchedGroups() uint64 {
+	return 0
+}
+
+func (m *mockSpan) SetMatchedGroups(_ uint64) {
+}
+
 func childOf(s1 Span, s2 Span) bool {
 	return s1.(*mockSpan).left == s2.(*mockSpan).parentID
 }

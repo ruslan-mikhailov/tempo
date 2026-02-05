@@ -19,14 +19,36 @@ import (
 )
 
 const (
-	internalLabelMetaType = "__meta_type"
-	internalMetaTypeCount = "__count"
-	internalLabelBucket   = "__bucket"
-	maxExemplars          = 100
-	maxExemplarsPerBucket = 2
+	internalLabelMetaType        = "__meta_type"
+	internalMetaTypeCount        = "__count"
+	internalLabelBucket          = "__bucket"
+	internalLabelQueryFragment   = "_meta_query_fragment"
+	maxExemplars                 = 100
+	maxExemplarsPerBucket        = 2
+	maxBatchFragments            = 64 // Limited by uint64 bitmap
 	// NormalNaN is a quiet NaN. This is also math.NaN().
 	normalNaN uint64 = 0x7ff8000000000001
 )
+
+// QueryFragment represents a single sub-query within a batch query.
+// Used by CompileBatchMetricsQueryRange to process multiple queries in a single pass.
+type QueryFragment struct {
+	// ID uniquely identifies this fragment (typically the query string)
+	ID string
+
+	// Index is the bit position in the MatchedGroups bitmap (0-63)
+	Index int
+
+	// filter is the compiled filter expression to check if a span matches.
+	// This is the SpansetFilter.Expression from the query's Pipeline.
+	filter FieldExpression
+
+	// pipeline is the metrics aggregation pipeline for this fragment
+	pipeline firstStageElement
+
+	// storageReq contains the original conditions for this fragment
+	storageReq *FetchSpansRequest
+}
 
 func DefaultQueryRangeStep(start, end uint64) uint64 {
 	delta := time.Duration(end - start)
@@ -1096,6 +1118,201 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, exempl
 	return me, nil
 }
 
+// CompileBatchMetricsQueryRange compiles multiple metrics queries for batch processing.
+// All queries are executed in a single pass through the data, with spans tagged
+// according to which query fragments they match. Results are labeled with
+// _meta_query_fragment to identify their source query.
+//
+// This is more efficient than running separate queries because:
+// 1. Single pass through storage (conditions merged with OR logic)
+// 2. Each span is evaluated once against all fragment filters
+//
+// Limitations:
+//   - Only supports simple filter queries (single SpansetFilter in pipeline)
+//   - Complex structural queries (>>, <<, ~) are not supported
+//   - Maximum 64 fragments (limited by uint64 bitmap)
+func (e *Engine) CompileBatchMetricsQueryRange(
+	req *tempopb.QueryRangeRequest,
+	queries []string,
+	exemplars int,
+	timeOverlapCutoff float64,
+	allowUnsafeQueryHints bool,
+) (*MetricsEvaluator, error) {
+	// Validate request parameters
+	if req.Start <= 0 {
+		return nil, fmt.Errorf("start required")
+	}
+	if req.End <= 0 {
+		return nil, fmt.Errorf("end required")
+	}
+	if req.End <= req.Start {
+		return nil, fmt.Errorf("end must be greater than start")
+	}
+	if req.Step <= 0 {
+		return nil, fmt.Errorf("step required")
+	}
+
+	// Validate fragment count
+	if len(queries) == 0 {
+		return nil, fmt.Errorf("at least one query required")
+	}
+	if len(queries) > maxBatchFragments {
+		return nil, fmt.Errorf("too many queries: %d exceeds maximum %d", len(queries), maxBatchFragments)
+	}
+
+	// Compile each query and validate structure
+	fragments := make([]QueryFragment, len(queries))
+	for i, q := range queries {
+		expr, _, metricsPipeline, _, storageReq, err := Compile(q)
+		if err != nil {
+			return nil, fmt.Errorf("compiling query %d (%q): %w", i, q, err)
+		}
+		if metricsPipeline == nil {
+			return nil, fmt.Errorf("query %d (%q) is not a metrics query", i, q)
+		}
+
+		// Extract and validate filter
+		filter, err := extractSimpleFilter(expr)
+		if err != nil {
+			return nil, fmt.Errorf("query %d (%q): %w", i, q, err)
+		}
+
+		metricsPipeline.init(req, AggregateModeRaw)
+
+		fragments[i] = QueryFragment{
+			ID:         q,
+			Index:      i,
+			filter:     filter,
+			pipeline:   metricsPipeline,
+			storageReq: storageReq,
+		}
+	}
+
+	// Merge conditions from all fragments
+	mergedReq := mergeFragmentConditions(fragments)
+
+	// Create evaluator
+	me := &MetricsEvaluator{
+		storageReq:        mergedReq,
+		fragments:         fragments,
+		timeOverlapCutoff: timeOverlapCutoff,
+		maxExemplars:      exemplars,
+		exemplarMap:       make(map[string]struct{}, exemplars),
+		start:             req.Start,
+		end:               req.End,
+		checkTime:         true,
+	}
+
+	// Setup SecondPass to evaluate group matching
+	mergedReq.SecondPass = func(ss *Spanset) ([]*Spanset, error) {
+		me.mtx.Lock()
+		defer me.mtx.Unlock()
+
+		// Evaluate each span against each fragment's filter
+		for _, span := range ss.Spans {
+			var matched uint64
+			for _, frag := range fragments {
+				if spanMatchesFilter(span, frag.filter) {
+					matched |= (1 << frag.Index)
+				}
+			}
+			span.SetMatchedGroups(matched)
+		}
+
+		return []*Spanset{ss}, nil
+	}
+
+	// Add required conditions for time filtering
+	if !mergedReq.HasAttribute(IntrinsicSpanStartTimeAttribute) {
+		mergedReq.SecondPassConditions = append(mergedReq.SecondPassConditions,
+			Condition{Attribute: IntrinsicSpanStartTimeAttribute})
+	}
+
+	return me, nil
+}
+
+// extractSimpleFilter extracts the filter expression from a simple query.
+// Returns the filter expression, or an error if the query is too complex for batch mode.
+func extractSimpleFilter(expr *RootExpr) (FieldExpression, error) {
+	if expr == nil || expr.Pipeline.Elements == nil {
+		return nil, fmt.Errorf("nil expression")
+	}
+
+	// For batch mode, we only support pipelines with a single SpansetFilter
+	// followed by the metrics aggregate (which is in MetricsPipeline, not Pipeline)
+	elements := expr.Pipeline.Elements
+
+	if len(elements) == 0 {
+		// Empty pipeline like "{}" - matches all spans
+		return nil, nil
+	}
+
+	if len(elements) > 1 {
+		// Multiple elements means complex query (e.g., select, coalesce, structural ops)
+		return nil, fmt.Errorf("batch mode only supports simple filter queries, got %d pipeline elements", len(elements))
+	}
+
+	// Check if the single element is a SpansetFilter
+	filter, ok := elements[0].(*SpansetFilter)
+	if !ok {
+		// Could be SpansetOperation (structural), GroupOperation, etc.
+		return nil, fmt.Errorf("batch mode only supports SpansetFilter, got %T", elements[0])
+	}
+
+	return filter.Expression, nil
+}
+
+// spanMatchesFilter evaluates if a span matches a filter expression.
+func spanMatchesFilter(span Span, filter FieldExpression) bool {
+	if filter == nil {
+		return true // No filter means match all
+	}
+	result, err := filter.execute(span)
+	if err != nil {
+		return false // On error, don't match
+	}
+	// Check if result is truthy
+	if b, ok := result.Bool(); ok {
+		return b
+	}
+	return false
+}
+
+// mergeFragmentConditions merges conditions from all fragments into a single FetchSpansRequest.
+// Uses OR logic (AllConditions=false) to fetch spans matching any fragment.
+func mergeFragmentConditions(fragments []QueryFragment) *FetchSpansRequest {
+	merged := &FetchSpansRequest{
+		AllConditions: false, // OR logic - match any fragment
+	}
+
+	conditionKey := func(c Condition) string {
+		// Create unique key for deduplication
+		return fmt.Sprintf("%s:%v:%v", c.Attribute.String(), c.Op, c.Operands)
+	}
+
+	seenFirst := make(map[string]struct{})
+	seenSecond := make(map[string]struct{})
+
+	for _, f := range fragments {
+		for _, c := range f.storageReq.Conditions {
+			key := conditionKey(c)
+			if _, ok := seenFirst[key]; !ok {
+				seenFirst[key] = struct{}{}
+				merged.Conditions = append(merged.Conditions, c)
+			}
+		}
+		for _, c := range f.storageReq.SecondPassConditions {
+			key := conditionKey(c)
+			if _, ok := seenSecond[key]; !ok {
+				seenSecond[key] = struct{}{}
+				merged.SecondPassConditions = append(merged.SecondPassConditions, c)
+			}
+		}
+	}
+
+	return merged
+}
+
 // optimize numerous things within the request that is specific to metrics.
 func optimize(req *FetchSpansRequest) {
 	if !req.AllConditions || req.SecondPassSelectAll {
@@ -1201,6 +1418,10 @@ type MetricsEvaluator struct {
 	metricsPipeline                 firstStageElement
 	spansTotal, spansDeduped, bytes uint64
 	mtx                             sync.Mutex
+
+	// fragments holds multiple query fragments for batch processing.
+	// When nil or empty, single-query mode is used (backward compatible).
+	fragments []QueryFragment
 }
 
 func timeRangeOverlap(reqStart, reqEnd, dataStart, dataEnd uint64) float64 {
@@ -1290,7 +1511,31 @@ func (e *MetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStar
 			}
 
 			validSpansCount++
-			e.metricsPipeline.observe(s)
+
+			if len(e.fragments) > 0 {
+				// Batch mode: route based on MatchedGroups bitmap
+				matched := s.MatchedGroups()
+
+				if matched == 0 {
+					// Fallback: MatchedGroups not set (older storage or not in SecondPass)
+					// Evaluate filters directly
+					for j := range e.fragments {
+						if spanMatchesFilter(s, e.fragments[j].filter) {
+							e.fragments[j].pipeline.observe(s)
+						}
+					}
+				} else {
+					// Use pre-computed bitmap
+					for j := range e.fragments {
+						if matched&(1<<j) != 0 {
+							e.fragments[j].pipeline.observe(s)
+						}
+					}
+				}
+			} else {
+				// Single query mode (backward compatible)
+				e.metricsPipeline.observe(s)
+			}
 
 			if !needExemplar {
 				continue
@@ -1305,10 +1550,37 @@ func (e *MetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStar
 		e.spansTotal += uint64(validSpansCount)
 
 		if needExemplar && validSpansCount > 0 {
-			e.metricsPipeline.observeExemplar(ss.Spans[randomSpanIndex])
+			if len(e.fragments) > 0 {
+				// In batch mode, observe exemplar for all matching fragments
+				matched := ss.Spans[randomSpanIndex].MatchedGroups()
+				if matched == 0 {
+					// Fallback
+					for j := range e.fragments {
+						if spanMatchesFilter(ss.Spans[randomSpanIndex], e.fragments[j].filter) {
+							e.fragments[j].pipeline.observeExemplar(ss.Spans[randomSpanIndex])
+						}
+					}
+				} else {
+					for j := range e.fragments {
+						if matched&(1<<j) != 0 {
+							e.fragments[j].pipeline.observeExemplar(ss.Spans[randomSpanIndex])
+						}
+					}
+				}
+			} else {
+				e.metricsPipeline.observeExemplar(ss.Spans[randomSpanIndex])
+			}
 		}
 
-		seriesCount = e.metricsPipeline.length()
+		if len(e.fragments) > 0 {
+			// Sum series count across all fragments
+			seriesCount = 0
+			for j := range e.fragments {
+				seriesCount += e.fragments[j].pipeline.length()
+			}
+		} else {
+			seriesCount = e.metricsPipeline.length()
+		}
 
 		e.mtx.Unlock()
 		ss.Release()
@@ -1326,6 +1598,13 @@ func (e *MetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStar
 }
 
 func (e *MetricsEvaluator) Length() int {
+	if len(e.fragments) > 0 {
+		total := 0
+		for i := range e.fragments {
+			total += e.fragments[i].pipeline.length()
+		}
+		return total
+	}
 	return e.metricsPipeline.length()
 }
 
@@ -1350,6 +1629,25 @@ func (e *MetricsEvaluator) Results() SeriesSet {
 	}
 
 	multiplier := spanMultiplier * traceMultiplier
+
+	if len(e.fragments) > 0 {
+		// Batch mode: combine results from all fragments with _meta_query_fragment labels
+		combined := make(SeriesSet)
+		for _, frag := range e.fragments {
+			fragLabel := Label{
+				Name:  internalLabelQueryFragment,
+				Value: NewStaticString(frag.ID),
+			}
+			for _, series := range frag.pipeline.result(multiplier) {
+				// Add fragment label to each series
+				series.Labels = series.Labels.Add(fragLabel)
+				// Update key to include fragment label
+				newKey := series.Labels.MapKey()
+				combined[newKey] = series
+			}
+		}
+		return combined
+	}
 
 	// NOTE: skip processing of second stage because not all first stage functions can't be pushed down.
 	// for example: if query has avg_over_time(), then we can't push it down to second stage, and second stage
