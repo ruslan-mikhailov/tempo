@@ -39,10 +39,6 @@ type QueryFragment struct {
 	// Index is the bit position in the MatchedGroups bitmap (0-63)
 	Index int
 
-	// filter is the compiled filter expression to check if a span matches.
-	// This is the SpansetFilter.Expression from the query's Pipeline.
-	filter FieldExpression
-
 	// pipeline is the metrics aggregation pipeline for this fragment
 	pipeline firstStageElement
 
@@ -1119,17 +1115,14 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, exempl
 }
 
 // CompileBatchMetricsQueryRange compiles multiple metrics queries for batch processing.
-// All queries are executed in a single pass through the data, with spans tagged
-// according to which query fragments they match. Results are labeled with
+// All queries are executed in a single pass through the data. Results are labeled with
 // _meta_query_fragment to identify their source query.
 //
 // This is more efficient than running separate queries because:
 // 1. Single pass through storage (conditions merged with OR logic)
-// 2. Each span is evaluated once against all fragment filters
+// 2. Each span is observed by all fragment pipelines
 //
 // Limitations:
-//   - Only supports simple filter queries (single SpansetFilter in pipeline)
-//   - Complex structural queries (>>, <<, ~) are not supported
 //   - Maximum 64 fragments (limited by uint64 bitmap)
 func (e *Engine) CompileBatchMetricsQueryRange(
 	req *tempopb.QueryRangeRequest,
@@ -1163,7 +1156,7 @@ func (e *Engine) CompileBatchMetricsQueryRange(
 	// Compile each query and validate structure
 	fragments := make([]QueryFragment, len(queries))
 	for i, q := range queries {
-		expr, _, metricsPipeline, _, storageReq, err := Compile(q)
+		_, _, metricsPipeline, _, storageReq, err := Compile(q)
 		if err != nil {
 			return nil, fmt.Errorf("compiling query %d (%q): %w", i, q, err)
 		}
@@ -1171,18 +1164,11 @@ func (e *Engine) CompileBatchMetricsQueryRange(
 			return nil, fmt.Errorf("query %d (%q) is not a metrics query", i, q)
 		}
 
-		// Extract and validate filter
-		filter, err := extractSimpleFilter(expr)
-		if err != nil {
-			return nil, fmt.Errorf("query %d (%q): %w", i, q, err)
-		}
-
 		metricsPipeline.init(req, AggregateModeRaw)
 
 		fragments[i] = QueryFragment{
 			ID:         q,
 			Index:      i,
-			filter:     filter,
 			pipeline:   metricsPipeline,
 			storageReq: storageReq,
 		}
@@ -1203,25 +1189,6 @@ func (e *Engine) CompileBatchMetricsQueryRange(
 		checkTime:         true,
 	}
 
-	// Setup SecondPass to evaluate group matching
-	mergedReq.SecondPass = func(ss *Spanset) ([]*Spanset, error) {
-		me.mtx.Lock()
-		defer me.mtx.Unlock()
-
-		// Evaluate each span against each fragment's filter
-		for _, span := range ss.Spans {
-			var matched uint64
-			for _, frag := range fragments {
-				if spanMatchesFilter(span, frag.filter) {
-					matched |= (1 << frag.Index)
-				}
-			}
-			span.SetMatchedGroups(matched)
-		}
-
-		return []*Spanset{ss}, nil
-	}
-
 	// Add required conditions for time filtering
 	if !mergedReq.HasAttribute(IntrinsicSpanStartTimeAttribute) {
 		mergedReq.SecondPassConditions = append(mergedReq.SecondPassConditions,
@@ -1229,53 +1196,6 @@ func (e *Engine) CompileBatchMetricsQueryRange(
 	}
 
 	return me, nil
-}
-
-// extractSimpleFilter extracts the filter expression from a simple query.
-// Returns the filter expression, or an error if the query is too complex for batch mode.
-func extractSimpleFilter(expr *RootExpr) (FieldExpression, error) {
-	if expr == nil || expr.Pipeline.Elements == nil {
-		return nil, fmt.Errorf("nil expression")
-	}
-
-	// For batch mode, we only support pipelines with a single SpansetFilter
-	// followed by the metrics aggregate (which is in MetricsPipeline, not Pipeline)
-	elements := expr.Pipeline.Elements
-
-	if len(elements) == 0 {
-		// Empty pipeline like "{}" - matches all spans
-		return nil, nil
-	}
-
-	if len(elements) > 1 {
-		// Multiple elements means complex query (e.g., select, coalesce, structural ops)
-		return nil, fmt.Errorf("batch mode only supports simple filter queries, got %d pipeline elements", len(elements))
-	}
-
-	// Check if the single element is a SpansetFilter
-	filter, ok := elements[0].(*SpansetFilter)
-	if !ok {
-		// Could be SpansetOperation (structural), GroupOperation, etc.
-		return nil, fmt.Errorf("batch mode only supports SpansetFilter, got %T", elements[0])
-	}
-
-	return filter.Expression, nil
-}
-
-// spanMatchesFilter evaluates if a span matches a filter expression.
-func spanMatchesFilter(span Span, filter FieldExpression) bool {
-	if filter == nil {
-		return true // No filter means match all
-	}
-	result, err := filter.execute(span)
-	if err != nil {
-		return false // On error, don't match
-	}
-	// Check if result is truthy
-	if b, ok := result.Bool(); ok {
-		return b
-	}
-	return false
 }
 
 // mergeFragmentConditions merges conditions from all fragments into a single FetchSpansRequest.
@@ -1513,24 +1433,9 @@ func (e *MetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStar
 			validSpansCount++
 
 			if len(e.fragments) > 0 {
-				// Batch mode: route based on MatchedGroups bitmap
-				matched := s.MatchedGroups()
-
-				if matched == 0 {
-					// Fallback: MatchedGroups not set (older storage or not in SecondPass)
-					// Evaluate filters directly
-					for j := range e.fragments {
-						if spanMatchesFilter(s, e.fragments[j].filter) {
-							e.fragments[j].pipeline.observe(s)
-						}
-					}
-				} else {
-					// Use pre-computed bitmap
-					for j := range e.fragments {
-						if matched&(1<<j) != 0 {
-							e.fragments[j].pipeline.observe(s)
-						}
-					}
+				// Batch mode: observe span in all fragment pipelines
+				for j := range e.fragments {
+					e.fragments[j].pipeline.observe(s)
 				}
 			} else {
 				// Single query mode (backward compatible)
@@ -1551,21 +1456,9 @@ func (e *MetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStar
 
 		if needExemplar && validSpansCount > 0 {
 			if len(e.fragments) > 0 {
-				// In batch mode, observe exemplar for all matching fragments
-				matched := ss.Spans[randomSpanIndex].MatchedGroups()
-				if matched == 0 {
-					// Fallback
-					for j := range e.fragments {
-						if spanMatchesFilter(ss.Spans[randomSpanIndex], e.fragments[j].filter) {
-							e.fragments[j].pipeline.observeExemplar(ss.Spans[randomSpanIndex])
-						}
-					}
-				} else {
-					for j := range e.fragments {
-						if matched&(1<<j) != 0 {
-							e.fragments[j].pipeline.observeExemplar(ss.Spans[randomSpanIndex])
-						}
-					}
+				// In batch mode, observe exemplar in all fragment pipelines
+				for j := range e.fragments {
+					e.fragments[j].pipeline.observeExemplar(ss.Spans[randomSpanIndex])
 				}
 			} else {
 				e.metricsPipeline.observeExemplar(ss.Spans[randomSpanIndex])
