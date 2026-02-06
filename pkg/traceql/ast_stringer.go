@@ -8,21 +8,43 @@ import (
 )
 
 func (r RootExpr) String() string {
-	s := strings.Builder{}
-	s.WriteString(r.Pipeline.String())
+	if r.MetricsMath != nil {
+		s := r.MetricsMath.String()
+		if r.Hints != nil {
+			s += " " + r.Hints.String()
+		}
+		return s
+	}
+
+	sb := strings.Builder{}
+	sb.WriteString(r.Pipeline.String())
 	if r.MetricsPipeline != nil {
-		s.WriteString(" | ")
-		s.WriteString(r.MetricsPipeline.String())
+		sb.WriteString(" | ")
+		sb.WriteString(r.MetricsPipeline.String())
 	}
 	if r.MetricsSecondStage != nil {
-		s.WriteString(" | ")
-		s.WriteString(r.MetricsSecondStage.String())
+		sb.WriteString(" | ")
+		sb.WriteString(r.MetricsSecondStage.String())
 	}
 	if r.Hints != nil {
-		s.WriteString(" ")
-		s.WriteString(r.Hints.String())
+		sb.WriteString(" ")
+		sb.WriteString(r.Hints.String())
 	}
-	return s.String()
+	return sb.String()
+}
+
+// metricsOperandString wraps a metrics operand in parentheses.
+// For leaf queries it returns "(pipeline | aggregation)".
+// For nested math it returns "(LHS op RHS)" recursively.
+func metricsOperandString(r *RootExpr) string {
+	if r.MetricsMath != nil {
+		return "(" + r.MetricsMath.String() + ")"
+	}
+	return "(" + r.String() + ")"
+}
+
+func (m MetricsMathOp) String() string {
+	return metricsOperandString(m.LHS) + " " + m.Op.String() + " " + metricsOperandString(m.RHS)
 }
 
 func (p Pipeline) String() string {

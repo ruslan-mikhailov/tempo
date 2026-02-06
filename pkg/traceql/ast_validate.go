@@ -19,6 +19,10 @@ func (e *unsupportedError) Error() string {
 }
 
 func (r RootExpr) validate() error {
+	if r.MetricsMath != nil {
+		return r.MetricsMath.validate()
+	}
+
 	err := r.Pipeline.validate()
 	if err != nil {
 		return err
@@ -47,6 +51,23 @@ func (r RootExpr) validate() error {
 		}
 	}
 
+	return nil
+}
+
+func (m MetricsMathOp) validate() error {
+	if err := m.LHS.validate(); err != nil {
+		return err
+	}
+	if err := m.RHS.validate(); err != nil {
+		return err
+	}
+	// Both sides must be metrics queries (leaf with MetricsPipeline or nested MetricsMath)
+	if m.LHS.MetricsPipeline == nil && m.LHS.MetricsMath == nil {
+		return fmt.Errorf("left side of %s must be a metrics query", m.Op)
+	}
+	if m.RHS.MetricsPipeline == nil && m.RHS.MetricsMath == nil {
+		return fmt.Errorf("right side of %s must be a metrics query", m.Op)
+	}
 	return nil
 }
 

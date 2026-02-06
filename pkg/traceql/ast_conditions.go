@@ -1,10 +1,19 @@
 package traceql
 
 func (r RootExpr) extractConditions(request *FetchSpansRequest) {
+	if r.MetricsMath != nil {
+		r.MetricsMath.extractConditions(request)
+		return
+	}
 	r.Pipeline.extractConditions(request)
 	if r.MetricsPipeline != nil {
 		r.MetricsPipeline.extractConditions(request)
 	}
+}
+
+func (m MetricsMathOp) extractConditions(request *FetchSpansRequest) {
+	m.LHS.extractConditions(request)
+	m.RHS.extractConditions(request)
 }
 
 func (f SpansetFilter) extractConditions(request *FetchSpansRequest) {

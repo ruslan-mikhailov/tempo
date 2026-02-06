@@ -32,6 +32,7 @@ import (
     aggregate Aggregate
     metricsAggregation firstStageElement
     metricsSecondStage secondStageElement
+    metricsExpression *RootExpr
 
     fieldExpression FieldExpression
     static Static
@@ -67,6 +68,7 @@ import (
 %type <scalarFilterOperation> scalarFilterOperation
 %type <metricsAggregation> metricsAggregation
 %type <metricsSecondStage> metricsSecondStage
+%type <metricsExpression> metricsExpression
 
 %type <scalarPipelineExpressionFilter> scalarPipelineExpressionFilter
 %type <scalarPipelineExpression> scalarPipelineExpression
@@ -128,6 +130,7 @@ root:
   | spansetPipeline PIPE metricsAggregation     { yylex.(*lexer).expr = newRootExprWithMetrics($1, $3) }
   // note: would only work for single metrics pipeline and not for multiple metrics pipelines before the fucntions
   | spansetPipeline PIPE metricsAggregation PIPE metricsSecondStage  { yylex.(*lexer).expr = newRootExprWithMetricsTwoStage($1, $3, $5) }
+  | metricsExpression                           { yylex.(*lexer).expr = $1 }
   | root hints                                  { yylex.(*lexer).expr.withHints($2) }
   ;
 
@@ -329,6 +332,24 @@ metricsAggregation:
 metricsSecondStage:
     TOPK OPEN_PARENS INTEGER CLOSE_PARENS                        { $$ = newTopKBottomK(OpTopK, $3) }
     | BOTTOMK OPEN_PARENS INTEGER CLOSE_PARENS                   { $$ = newTopKBottomK(OpBottomK, $3) }
+  ;
+
+// **********************
+// Metrics Math Expressions
+// **********************
+metricsExpression:
+    OPEN_PARENS spansetPipeline PIPE metricsAggregation CLOSE_PARENS
+        { $$ = newRootExprWithMetrics($2, $4) }
+  | OPEN_PARENS metricsExpression CLOSE_PARENS
+        { $$ = $2 }
+  | metricsExpression ADD metricsExpression
+        { $$ = newRootExprWithMetricsMath($1, OpAdd, $3) }
+  | metricsExpression SUB metricsExpression
+        { $$ = newRootExprWithMetricsMath($1, OpSub, $3) }
+  | metricsExpression MUL metricsExpression
+        { $$ = newRootExprWithMetricsMath($1, OpMult, $3) }
+  | metricsExpression DIV metricsExpression
+        { $$ = newRootExprWithMetricsMath($1, OpDiv, $3) }
   ;
 
 // **********************

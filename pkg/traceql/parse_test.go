@@ -1691,6 +1691,189 @@ func TestMetricsSecondStage(t *testing.T) {
 	}
 }
 
+func TestMetricsMath(t *testing.T) {
+	emptyFilter := newSpansetFilter(NewStaticBool(true))
+
+	tests := []struct {
+		in       string
+		expected *RootExpr
+	}{
+		// Basic division
+		{
+			in: `({} | count_over_time()) / ({} | count_over_time())`,
+			expected: newRootExprWithMetricsMath(
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil),
+				),
+				OpDiv,
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil),
+				),
+			),
+		},
+		// Addition
+		{
+			in: `({} | rate()) + ({} | count_over_time())`,
+			expected: newRootExprWithMetricsMath(
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateRate, nil),
+				),
+				OpAdd,
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil),
+				),
+			),
+		},
+		// Subtraction
+		{
+			in: `({} | rate()) - ({} | count_over_time())`,
+			expected: newRootExprWithMetricsMath(
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateRate, nil),
+				),
+				OpSub,
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil),
+				),
+			),
+		},
+		// Multiplication
+		{
+			in: `({} | rate()) * ({} | count_over_time())`,
+			expected: newRootExprWithMetricsMath(
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateRate, nil),
+				),
+				OpMult,
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil),
+				),
+			),
+		},
+		// Precedence: * binds tighter than +
+		// Parses as: ({} | rate()) + (({} | rate()) * ({} | count_over_time()))
+		{
+			in: `({} | rate()) + ({} | rate()) * ({} | count_over_time())`,
+			expected: newRootExprWithMetricsMath(
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateRate, nil),
+				),
+				OpAdd,
+				newRootExprWithMetricsMath(
+					newRootExprWithMetrics(
+						newPipeline(emptyFilter),
+						newMetricsAggregate(metricsAggregateRate, nil),
+					),
+					OpMult,
+					newRootExprWithMetrics(
+						newPipeline(emptyFilter),
+						newMetricsAggregate(metricsAggregateCountOverTime, nil),
+					),
+				),
+			),
+		},
+		// Nested parentheses override precedence
+		{
+			in: `(({} | rate()) + ({} | rate())) * ({} | count_over_time())`,
+			expected: newRootExprWithMetricsMath(
+				newRootExprWithMetricsMath(
+					newRootExprWithMetrics(
+						newPipeline(emptyFilter),
+						newMetricsAggregate(metricsAggregateRate, nil),
+					),
+					OpAdd,
+					newRootExprWithMetrics(
+						newPipeline(emptyFilter),
+						newMetricsAggregate(metricsAggregateRate, nil),
+					),
+				),
+				OpMult,
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil),
+				),
+			),
+		},
+		// With by() clause
+		{
+			in: `({} | count_over_time() by(name)) / ({} | count_over_time() by(name))`,
+			expected: newRootExprWithMetricsMath(
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, []Attribute{
+						NewIntrinsic(IntrinsicName),
+					}),
+				),
+				OpDiv,
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, []Attribute{
+						NewIntrinsic(IntrinsicName),
+					}),
+				),
+			),
+		},
+		// With hints on the entire expression
+		{
+			in: `({} | rate()) / ({} | count_over_time()) with(sample=0.1)`,
+			expected: newRootExprWithMetricsMath(
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateRate, nil),
+				),
+				OpDiv,
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil),
+				),
+			).withHints(newHints([]*Hint{
+				newHint("sample", NewStaticFloat(0.1)),
+			})),
+		},
+		// Single parenthesized metrics query (new valid syntax)
+		{
+			in: `({} | count_over_time())`,
+			expected: newRootExprWithMetrics(
+				newPipeline(emptyFilter),
+				newMetricsAggregate(metricsAggregateCountOverTime, nil),
+			),
+		},
+		// Multi-stage pipeline inside metrics math
+		{
+			in: `({ .foo = "bar" } | count_over_time()) / ({} | count_over_time())`,
+			expected: newRootExprWithMetricsMath(
+				newRootExprWithMetrics(
+					newPipeline(newSpansetFilter(newBinaryOperation(OpEqual, NewAttribute("foo"), NewStaticString("bar")))),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil),
+				),
+				OpDiv,
+				newRootExprWithMetrics(
+					newPipeline(emptyFilter),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil),
+				),
+			),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.in, func(t *testing.T) {
+			actual, err := Parse(tc.in)
+
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, actual)
+		})
+	}
+}
+
 func TestMetricsSecondStageErrors(t *testing.T) {
 	tests := []struct {
 		in  string

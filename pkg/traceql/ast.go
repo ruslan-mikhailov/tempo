@@ -33,7 +33,19 @@ type RootExpr struct {
 	Pipeline           Pipeline
 	MetricsPipeline    firstStageElement
 	MetricsSecondStage secondStageElement
+	MetricsMath        *MetricsMathOp
 	Hints              *Hints
+}
+
+// MetricsMathOp represents a binary math operation between two metrics expressions.
+// Each side (LHS, RHS) is a *RootExpr where either MetricsPipeline != nil (leaf)
+// or MetricsMath != nil (nested operation), enabling expressions like:
+//
+//	({status=error} | count_over_time()) / ({} | count_over_time())
+type MetricsMathOp struct {
+	Op  Operator   // OpAdd, OpSub, OpMult, OpDiv
+	LHS *RootExpr
+	RHS *RootExpr
 }
 
 func NeedsFullTrace(e ...Element) bool {
@@ -63,6 +75,9 @@ func NeedsFullTrace(e ...Element) bool {
 }
 
 func (r *RootExpr) NeedsFullTrace() bool {
+	if r.MetricsMath != nil {
+		return r.MetricsMath.LHS.NeedsFullTrace() || r.MetricsMath.RHS.NeedsFullTrace()
+	}
 	for _, e := range r.Pipeline.Elements {
 		if NeedsFullTrace(e) {
 			return true
@@ -107,6 +122,12 @@ func newRootExprWithMetricsTwoStage(e PipelineElement, m1 firstStageElement, m2 
 	}
 }
 
+func newRootExprWithMetricsMath(lhs *RootExpr, op Operator, rhs *RootExpr) *RootExpr {
+	return &RootExpr{
+		MetricsMath: &MetricsMathOp{Op: op, LHS: lhs, RHS: rhs},
+	}
+}
+
 func (r *RootExpr) withHints(h *Hints) *RootExpr {
 	r.Hints = h
 	return r
@@ -115,6 +136,10 @@ func (r *RootExpr) withHints(h *Hints) *RootExpr {
 // IsNoop detects trivial noop queries like {false} which never return
 // results and can be used to exit early.
 func (r *RootExpr) IsNoop() bool {
+	if r.MetricsMath != nil {
+		return false
+	}
+
 	isNoopFilter := func(x any) bool {
 		f, ok := x.(*SpansetFilter)
 		if !ok {

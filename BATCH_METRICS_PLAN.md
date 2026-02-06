@@ -320,3 +320,165 @@ Verifies batch queries produce correct results with vparquet4 storage (which has
 3. Automatic query optimization (detecting common subexpressions)
 4. More than 64 fragments (use `[]uint64` or different data structure)
 5. Exemplar support in batch mode
+
+---
+
+# Metrics Math Operations -- AST and Parser
+
+## Background
+
+To support expressions like `({status=error} | count_over_time()) / ({} | count_over_time())`, the TraceQL parser and AST must be extended to handle binary math operations (`+`, `-`, `*`, `/`) between metrics queries.
+
+This builds on the batch metrics infrastructure above: the AST/parser produces a tree of math operations where each leaf is a metrics query. The evaluation layer (future work) will extract the leaves, compile them as batch fragments, execute them via `CompileBatchMetricsQueryRange`, and apply the math on the resulting time series.
+
+## Status
+
+All items implemented and tested.
+
+- [x] **ast-node**: Add `MetricsMathOp` struct and `RootExpr.MetricsMath` field to `ast.go`
+- [x] **root-helpers**: Update `NeedsFullTrace()` and `IsNoop()` on `RootExpr` to handle `MetricsMath`
+- [x] **grammar**: Add `metricsExpression` production, union type, and update `root` rule in `expr.y`
+- [x] **regenerate**: Regenerate `expr.y.go` with `goyacc`
+- [x] **stringer**: Add `MetricsMathOp.String()`, `metricsOperandString()`, update `RootExpr.String()`
+- [x] **validate**: Add `MetricsMathOp.validate()`, update `RootExpr.validate()`
+- [x] **conditions**: Add `MetricsMathOp.extractConditions()`, update `RootExpr.extractConditions()`
+- [x] **parse-tests**: Add parse test cases for metrics math expressions
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Input [Input Query]
+        Query["({status=error} | count_over_time()) / ({} | count_over_time())"]
+    end
+
+    subgraph Parser [Parser]
+        Lex["Lexer: tokenize"]
+        Grammar["Grammar: metricsExpression production"]
+    end
+
+    subgraph AST [AST]
+        Root["RootExpr"]
+        Math["MetricsMathOp { Op: OpDiv }"]
+        LHS["RootExpr { Pipeline: {status=error}, MetricsPipeline: count_over_time() }"]
+        RHS["RootExpr { Pipeline: {}, MetricsPipeline: count_over_time() }"]
+    end
+
+    Query --> Lex --> Grammar
+    Grammar --> Root
+    Root -->|MetricsMath| Math
+    Math -->|LHS| LHS
+    Math -->|RHS| RHS
+```
+
+### Key design decisions
+
+- **`MetricsMathOp` uses `*RootExpr` for LHS/RHS**: Each operand is a `*RootExpr` where either `MetricsPipeline != nil` (leaf metrics query) or `MetricsMath != nil` (nested math operation). This enables arbitrary nesting like `(A / B) + (C / D)`.
+- **Leaf metrics queries must be parenthesized**: The grammar requires `(spansetPipeline | metricsAggregation)` with explicit parens to avoid ambiguity with existing productions. Non-parenthesized `{} | count_over_time()` still uses the existing `root` production.
+- **No grammar conflicts**: `metricsAggregation` start tokens (`RATE`, `COUNT_OVER_TIME`, etc.) are disjoint from `spansetExpression` start tokens (`OPEN_BRACE`, `OPEN_PARENS`), so the parser can unambiguously decide the path after `spansetPipeline PIPE`.
+- **Operator precedence**: Uses existing `%left` precedence for `ADD`/`SUB` and `MUL`/`DIV`, so `*`/`/` bind tighter than `+`/`-`.
+
+## Implementation
+
+### 1. AST Node (`pkg/traceql/ast.go`)
+
+```go
+type MetricsMathOp struct {
+    Op  Operator   // OpAdd, OpSub, OpMult, OpDiv
+    LHS *RootExpr
+    RHS *RootExpr
+}
+```
+
+`RootExpr` gains a new field:
+
+```go
+type RootExpr struct {
+    Pipeline           Pipeline
+    MetricsPipeline    firstStageElement
+    MetricsSecondStage secondStageElement
+    MetricsMath        *MetricsMathOp
+    Hints              *Hints
+}
+```
+
+Constructor:
+
+```go
+func newRootExprWithMetricsMath(lhs *RootExpr, op Operator, rhs *RootExpr) *RootExpr {
+    return &RootExpr{
+        MetricsMath: &MetricsMathOp{Op: op, LHS: lhs, RHS: rhs},
+    }
+}
+```
+
+### 2. Grammar (`pkg/traceql/expr.y`)
+
+New `metricsExpression` non-terminal:
+
+```yacc
+metricsExpression:
+    OPEN_PARENS spansetPipeline PIPE metricsAggregation CLOSE_PARENS
+        { $$ = newRootExprWithMetrics($2, $4) }
+  | OPEN_PARENS metricsExpression CLOSE_PARENS
+        { $$ = $2 }
+  | metricsExpression ADD metricsExpression
+        { $$ = newRootExprWithMetricsMath($1, OpAdd, $3) }
+  | metricsExpression SUB metricsExpression
+        { $$ = newRootExprWithMetricsMath($1, OpSub, $3) }
+  | metricsExpression MUL metricsExpression
+        { $$ = newRootExprWithMetricsMath($1, OpMult, $3) }
+  | metricsExpression DIV metricsExpression
+        { $$ = newRootExprWithMetricsMath($1, OpDiv, $3) }
+  ;
+```
+
+Added to `root`:
+
+```yacc
+root:
+    ...existing rules...
+  | metricsExpression  { yylex.(*lexer).expr = $1 }
+  ;
+```
+
+### 3. String representation (`pkg/traceql/ast_stringer.go`)
+
+Each leaf operand is wrapped in parentheses to ensure round-trip correctness:
+
+```go
+func metricsOperandString(r *RootExpr) string {
+    if r.MetricsMath != nil {
+        return "(" + r.MetricsMath.String() + ")"
+    }
+    return "(" + r.String() + ")"
+}
+
+func (m MetricsMathOp) String() string {
+    return metricsOperandString(m.LHS) + " " + m.Op.String() + " " + metricsOperandString(m.RHS)
+}
+```
+
+### 4. Validation (`pkg/traceql/ast_validate.go`)
+
+Both sides must be metrics queries (either a leaf with `MetricsPipeline` or nested `MetricsMath`).
+
+### 5. Condition extraction (`pkg/traceql/ast_conditions.go`)
+
+Delegates to both sides, merging conditions from all leaf queries.
+
+## Out of scope
+
+- **Evaluation**: `Compile()` on a math expression returns nil `MetricsPipeline`. Callers must detect `MetricsMath != nil` and use the batch path.
+- **`metricsSecondStage` on math expressions**: e.g., `({} | rate()) / ({} | count_over_time()) | topk(10)`
+- **`POW` and `MOD` operators**: only `+`, `-`, `*`, `/` for now.
+
+## Files Modified
+
+- `pkg/traceql/ast.go` -- `MetricsMathOp` struct, `RootExpr.MetricsMath` field, constructor, `NeedsFullTrace()`, `IsNoop()`
+- `pkg/traceql/expr.y` -- `metricsExpression` production, updated `root` rule, union type
+- `pkg/traceql/expr.y.go` -- Regenerated
+- `pkg/traceql/ast_stringer.go` -- `MetricsMathOp.String()`, `metricsOperandString()`, updated `RootExpr.String()`
+- `pkg/traceql/ast_validate.go` -- `MetricsMathOp.validate()`, updated `RootExpr.validate()`
+- `pkg/traceql/ast_conditions.go` -- `MetricsMathOp.extractConditions()`, updated `RootExpr.extractConditions()`
+- `pkg/traceql/parse_test.go` -- `TestMetricsMath` test cases
