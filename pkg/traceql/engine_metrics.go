@@ -39,6 +39,11 @@ type QueryFragment struct {
 	// Index is the bit position in the MatchedGroups bitmap (0-63)
 	Index int
 
+	// eval is the compiled pipeline evaluation function that filters spans.
+	// This is Pipeline.evaluate from Compile(), which runs the query's
+	// SpansetFilter to determine which spans match this fragment.
+	eval SpansetFilterFunc
+
 	// pipeline is the metrics aggregation pipeline for this fragment
 	pipeline firstStageElement
 
@@ -1156,7 +1161,7 @@ func (e *Engine) CompileBatchMetricsQueryRange(
 	// Compile each query and validate structure
 	fragments := make([]QueryFragment, len(queries))
 	for i, q := range queries {
-		_, _, metricsPipeline, _, storageReq, err := Compile(q)
+		_, eval, metricsPipeline, _, storageReq, err := Compile(q)
 		if err != nil {
 			return nil, fmt.Errorf("compiling query %d (%q): %w", i, q, err)
 		}
@@ -1169,6 +1174,7 @@ func (e *Engine) CompileBatchMetricsQueryRange(
 		fragments[i] = QueryFragment{
 			ID:         q,
 			Index:      i,
+			eval:       eval,
 			pipeline:   metricsPipeline,
 			storageReq: storageReq,
 		}
@@ -1417,63 +1423,81 @@ func (e *MetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStar
 
 		needExemplar := e.maxExemplars > 0 && e.sampleExemplar(ss.TraceID)
 
-		for i, s := range ss.Spans {
+		if len(e.fragments) > 0 {
+			// Batch mode: run each fragment's eval to filter spans, then observe matches.
+			// Save original spans since Pipeline.evaluate modifies the spanset in-place.
+			originalSpans := ss.Spans
 
-			if e.checkTime {
-				st := s.StartTimeUnixNanos()
-				if st <= e.start || st > e.end {
+			for j := range e.fragments {
+				// Copy the span slice so eval can safely modify it
+				ss.Spans = make([]Span, len(originalSpans))
+				copy(ss.Spans, originalSpans)
+
+				filtered, err := e.fragments[j].eval([]*Spanset{ss})
+				if err != nil {
 					continue
 				}
-			}
 
-			if e.storageReq.SpanSampler != nil {
-				e.storageReq.SpanSampler.Measured()
-			}
+				for _, fss := range filtered {
+					for _, s := range fss.Spans {
+						if e.checkTime {
+							st := s.StartTimeUnixNanos()
+							if st <= e.start || st > e.end {
+								continue
+							}
+						}
 
-			validSpansCount++
-
-			if len(e.fragments) > 0 {
-				// Batch mode: observe span in all fragment pipelines
-				for j := range e.fragments {
-					e.fragments[j].pipeline.observe(s)
+						validSpansCount++
+						e.fragments[j].pipeline.observe(s)
+					}
 				}
-			} else {
-				// Single query mode (backward compatible)
-				e.metricsPipeline.observe(s)
 			}
 
-			if !needExemplar {
-				continue
-			}
+			// Restore original spans for release
+			ss.Spans = originalSpans
 
-			// Reservoir sampling - select a random span for exemplar
-			// Each span has a 1/validSpansCount probability of being selected
-			if validSpansCount == 1 || rand.Intn(validSpansCount) == 0 {
-				randomSpanIndex = i
-			}
-		}
-		e.spansTotal += uint64(validSpansCount)
-
-		if needExemplar && validSpansCount > 0 {
-			if len(e.fragments) > 0 {
-				// In batch mode, observe exemplar in all fragment pipelines
-				for j := range e.fragments {
-					e.fragments[j].pipeline.observeExemplar(ss.Spans[randomSpanIndex])
-				}
-			} else {
-				e.metricsPipeline.observeExemplar(ss.Spans[randomSpanIndex])
-			}
-		}
-
-		if len(e.fragments) > 0 {
 			// Sum series count across all fragments
 			seriesCount = 0
 			for j := range e.fragments {
 				seriesCount += e.fragments[j].pipeline.length()
 			}
 		} else {
+			// Single query mode (backward compatible)
+			for i, s := range ss.Spans {
+
+				if e.checkTime {
+					st := s.StartTimeUnixNanos()
+					if st <= e.start || st > e.end {
+						continue
+					}
+				}
+
+				if e.storageReq.SpanSampler != nil {
+					e.storageReq.SpanSampler.Measured()
+				}
+
+				validSpansCount++
+				e.metricsPipeline.observe(s)
+
+				if !needExemplar {
+					continue
+				}
+
+				// Reservoir sampling - select a random span for exemplar
+				// Each span has a 1/validSpansCount probability of being selected
+				if validSpansCount == 1 || rand.Intn(validSpansCount) == 0 {
+					randomSpanIndex = i
+				}
+			}
+
+			if needExemplar && validSpansCount > 0 {
+				e.metricsPipeline.observeExemplar(ss.Spans[randomSpanIndex])
+			}
+
 			seriesCount = e.metricsPipeline.length()
 		}
+
+		e.spansTotal += uint64(validSpansCount)
 
 		e.mtx.Unlock()
 		ss.Release()
