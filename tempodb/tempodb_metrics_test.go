@@ -2,14 +2,18 @@ package tempodb
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"os"
 	"path"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-kit/log"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/uuid"
 	"github.com/grafana/tempo/pkg/model"
 	"github.com/grafana/tempo/pkg/tempopb"
 	common_v1 "github.com/grafana/tempo/pkg/tempopb/common/v1"
@@ -19,6 +23,7 @@ import (
 	"github.com/grafana/tempo/pkg/util/test"
 	"github.com/grafana/tempo/tempodb/backend"
 	"github.com/grafana/tempo/tempodb/backend/local"
+	"github.com/grafana/tempo/tempodb/encoding"
 	"github.com/grafana/tempo/tempodb/encoding/common"
 	"github.com/grafana/tempo/tempodb/encoding/vparquet4"
 	"github.com/grafana/tempo/tempodb/encoding/vparquet5"
@@ -1577,4 +1582,159 @@ func TestTempoDBBatchQueryRangeFallback(t *testing.T) {
 
 	require.InDelta(t, 10.0, evenCount, 0.1, "Expected 10 even spans")
 	require.InDelta(t, 20.0, totalCount, 0.1, "Expected 20 total spans")
+}
+
+// blockForMetricsBenchmarks opens a local block for benchmarking.
+// Requires environment variables:
+//
+//	BENCH_BLOCKID  - block UUID (e.g. 030c8c4f-9d47-4916-aadc-26b90b1d2bc4)
+//	BENCH_PATH     - root backend path (<path>/<tenant>/<block>)
+//	BENCH_TENANTID - tenant ID (default "1")
+func blockForMetricsBenchmarks(b *testing.B) (common.BackendBlock, *backend.BlockMeta) {
+	id, ok := os.LookupEnv("BENCH_BLOCKID")
+	if !ok {
+		b.Skip("BENCH_BLOCKID is not set. Set it to the block UUID to benchmark against.")
+	}
+
+	p, ok := os.LookupEnv("BENCH_PATH")
+	if !ok {
+		b.Skip("BENCH_PATH is not set. Set it to the root backend path.")
+	}
+
+	tenantID, ok := os.LookupEnv("BENCH_TENANTID")
+	if !ok {
+		tenantID = "1"
+	}
+
+	blockID := uuid.MustParse(id)
+	r, _, _, err := local.New(&local.Config{
+		Path: p,
+	})
+	require.NoError(b, err)
+
+	rr := backend.NewReader(r)
+	meta, err := rr.BlockMeta(context.Background(), blockID, tenantID)
+	require.NoError(b, err)
+
+	block, err := encoding.OpenBlock(meta, rr)
+	require.NoError(b, err)
+
+	return block, meta
+}
+
+// BenchmarkMetricsQueryRange benchmarks metrics query execution against a real block.
+//
+// Sub-benchmarks:
+//
+//	math  - MetricsMath expression: two filtered rate() queries combined with +
+//	regex - Single query using regex filter to match both values
+//	concurrent_5 - Five independent queries executed concurrently
+func BenchmarkMetricsQueryRange(b *testing.B) {
+	block, meta := blockForMetricsBenchmarks(b)
+
+	var (
+		e    = traceql.NewEngine()
+		ctx  = context.Background()
+		opts = common.DefaultSearchOptions()
+		st   = uint64(meta.StartTime.UnixNano())
+		end  = uint64(meta.EndTime.UnixNano())
+	)
+
+	f := traceql.NewSpansetFetcherWrapper(func(ctx context.Context, req traceql.FetchSpansRequest) (traceql.FetchSpansResponse, error) {
+		return block.Fetch(ctx, req, opts)
+	})
+
+	newReq := func(query string) *tempopb.QueryRangeRequest {
+		return &tempopb.QueryRangeRequest{
+			Query: query,
+			Step:  uint64(time.Minute),
+			Start: st,
+			End:   end,
+		}
+	}
+
+	b.Run("math", func(b *testing.B) {
+		req := newReq(`({span.http.status_code=200} | rate()) + ({span.http.status_code=500} | rate())`)
+
+		eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
+		require.NoError(b, err)
+
+		b.ResetTimer()
+		for b.Loop() {
+			err = eval.Do(ctx, f, st, end, 0)
+			require.NoError(b, err)
+		}
+		b.StopTimer()
+
+		ss := eval.Results()
+		bytes, spansTotal, _ := eval.Metrics()
+		b.ReportMetric(float64(bytes), "bytes")
+		b.ReportMetric(float64(spansTotal), "spans")
+		b.ReportMetric(float64(len(ss)), "series")
+	})
+
+	b.Run("regex", func(b *testing.B) {
+		req := newReq(`{span.http.status_code=~"200|500"} | rate()`)
+
+		eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
+		require.NoError(b, err)
+
+		b.ResetTimer()
+		for b.Loop() {
+			err = eval.Do(ctx, f, st, end, 0)
+			require.NoError(b, err)
+		}
+		b.StopTimer()
+
+		ss := eval.Results()
+		bytes, spansTotal, _ := eval.Metrics()
+		b.ReportMetric(float64(bytes), "bytes")
+		b.ReportMetric(float64(spansTotal), "spans")
+		b.ReportMetric(float64(len(ss)), "series")
+	})
+
+	b.Run("concurrent_5", func(b *testing.B) {
+		queries := []string{
+			`{} | rate()`,
+			`{status=error} | rate()`,
+			`{} | rate() by (resource.service.name)`,
+			`{span.http.status_code=200} | count_over_time()`,
+			`({span.http.status_code=200} | rate()) + ({span.http.status_code=500} | rate())`,
+		}
+
+		evals := make([]*traceql.MetricsEvaluator, len(queries))
+		for i, q := range queries {
+			req := newReq(q)
+			eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
+			require.NoError(b, err)
+			evals[i] = eval
+		}
+
+		b.ResetTimer()
+		for b.Loop() {
+			var wg sync.WaitGroup
+			errs := make([]error, len(evals))
+
+			for i, eval := range evals {
+				wg.Add(1)
+				go func(idx int, ev *traceql.MetricsEvaluator) {
+					defer wg.Done()
+					errs[idx] = ev.Do(ctx, f, st, end, 0)
+				}(i, eval)
+			}
+
+			wg.Wait()
+
+			for i, err := range errs {
+				require.NoError(b, err, fmt.Sprintf("query %d failed: %s", i, queries[i]))
+			}
+		}
+		b.StopTimer()
+
+		var totalSeries int
+		for _, eval := range evals {
+			totalSeries += len(eval.Results())
+		}
+		b.ReportMetric(float64(totalSeries), "total_series")
+	})
 }
