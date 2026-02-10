@@ -1703,6 +1703,12 @@ func BenchmarkMetricsQueryRange(b *testing.B) {
 		runFullPipeline(b, req)
 	})
 
+	b.Run("regex all cond false", func(b *testing.B) {
+		query := `({resource.service.name=~"gamma-operator|modelapi|loki-ruler|service-model-operator|tempo-block-builder" || resource.host.name = "it will not found Im sure"} | count_over_time())`
+		req := newReq(query)
+		runFullPipeline(b, req)
+	})
+
 	b.Run("concurrent_5", func(b *testing.B) {
 		queries := []string{
 			`{resource.service.name="gamma-operator"} | count_over_time()`,
