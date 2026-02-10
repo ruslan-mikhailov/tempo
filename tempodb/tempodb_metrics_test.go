@@ -1693,7 +1693,7 @@ func BenchmarkMetricsQueryRange(b *testing.B) {
 	// })
 
 	b.Run("math", func(b *testing.B) {
-		query := `({resource.service.name="gamma-operator} | rate()) + ({resource.service.name="modelapi"} | rate()) + ({resource.service.name="loki-ruler"} | rate()) + ({resource.service.name="service-model-operator"} | rate()) + ({resource.service.name="tempo-block-builder"} | rate())`
+		query := `({resource.service.name="gamma-operator"} | count_over_time()) + ({resource.service.name="modelapi"} | count_over_time()) + ({resource.service.name="loki-ruler"} | count_over_time()) + ({resource.service.name="service-model-operator"} | count_over_time()) + ({resource.service.name="tempo-block-builder"} | count_over_time())`
 		req := newReq(query)
 		runFullPipeline(b, req)
 	})
@@ -1706,11 +1706,11 @@ func BenchmarkMetricsQueryRange(b *testing.B) {
 
 	b.Run("concurrent_5", func(b *testing.B) {
 		queries := []string{
-			`{} | rate()`,
-			`{status=error} | rate()`,
-			`{} | rate() by (resource.service.name)`,
-			`{span.http.status_code=200} | count_over_time()`,
-			`({span.http.status_code=200} | rate()) + ({span.http.status_code=500} | rate())`,
+			`{resource.service.name="gamma-operator"} | count_over_time()`,
+			`{resource.service.name="modelapi"} | count_over_time()`,
+			`{resource.service.name="loki-ruler"} | count_over_time()`,
+			`{resource.service.name="service-model-operator"} | count_over_time()`,
+			`{resource.service.name="tempo-block-builder"} | count_over_time()`,
 		}
 
 		reqs := make([]*tempopb.QueryRangeRequest, len(queries))
