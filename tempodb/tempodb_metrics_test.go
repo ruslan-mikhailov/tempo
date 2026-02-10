@@ -1704,19 +1704,19 @@ func BenchmarkMetricsQueryRange(b *testing.B) {
 	})
 
 	b.Run("regex all cond false", func(b *testing.B) {
-		query := `{resource.service.name=~"gamma-operator|modelapi|loki-ruler|service-model-operator|tempo-block-builder" || resource.host.name = "it will not found Im sure"} | count_over_time()`
+		query := `{resource.service.name=~"gamma-operator|modelapi|loki-ruler|service-model-operator|tempo-block-builder" || resource.host.name = "it will not find Im sure"} | count_over_time()`
 		req := newReq(query)
 		runFullPipeline(b, req)
 	})
 
 	b.Run("ORs", func(b *testing.B) {
-		query := `{resource.service.name="gamma-operator" || resource.host.name != "it will not found Im sure" || resource.ip!="loki-ruler" || resource.k8s.cluster.name!="service-model-operator" || resource.k8s.container.name!="tempo-block-builder"} | count_over_time()`
+		query := `{resource.service.name="gamma-operator" || resource.host.name != "it will not find Im sure" || resource.ip!="loki-ruler" || resource.k8s.cluster.name!="service-model-operator" || resource.k8s.container.name!="tempo-block-builder"} | count_over_time()`
 		req := newReq(query)
 		runFullPipeline(b, req)
 	})
 
 	b.Run("math different conditions", func(b *testing.B) {
-		query := `({resource.service.name="gamma-operator"} | count_over_time()) + ({resource.host.name != "it will not found Im sure"} | count_over_time()) + ({resource.ip!="loki-ruler"} | count_over_time()) + ({resource.k8s.cluster.name!="service-model-operator"} | count_over_time()) + ({resource.k8s.container.name!="tempo-block-builder"} | count_over_time())`
+		query := `({resource.service.name="gamma-operator"} | count_over_time()) + ({resource.host.name != "it will not find Im sure"} | count_over_time()) + ({resource.ip!="loki-ruler"} | count_over_time()) + ({resource.k8s.cluster.name!="service-model-operator"} | count_over_time()) + ({resource.k8s.container.name!="tempo-block-builder"} | count_over_time())`
 		req := newReq(query)
 		runFullPipeline(b, req)
 	})
