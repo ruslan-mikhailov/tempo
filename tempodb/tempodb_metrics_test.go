@@ -1680,23 +1680,26 @@ func BenchmarkMetricsQueryRange(b *testing.B) {
 			require.NoError(b, err)
 
 			evalL3.ObserveSeries(l2Series)
-			_ = evalL3.Results()
+			res := evalL3.Results()
+			_ = res
 		}
 	}
-	b.Run("temp", func(b *testing.B) {
-		query := `{ } | count_over_time() by (resource.service.name)`
-		req := newReq(query)
-		runFullPipeline(b, req)
-	})
+
+	// b.Run("temp", func(b *testing.B) {
+	// 	query := `{ } | count_over_time() by (resource.service.name)`
+	// 	// query := `{ } | count_over_time()`
+	// 	req := newReq(query)
+	// 	runFullPipeline(b, req)
+	// })
 
 	b.Run("math", func(b *testing.B) {
-		query := `({span.http.status_code=200} | rate()) + ({span.http.status_code=500} | rate())`
+		query := `({resource.service.name="gamma-operator} | rate()) + ({resource.service.name="modelapi"} | rate()) + ({resource.service.name="loki-ruler"} | rate()) + ({resource.service.name="service-model-operator"} | rate()) + ({resource.service.name="tempo-block-builder"} | rate())`
 		req := newReq(query)
 		runFullPipeline(b, req)
 	})
 
 	b.Run("regex", func(b *testing.B) {
-		query := `{span.http.status_code=~"200|500"} | rate()`
+		query := `({resource.service.name=~"gamma-operator|modelapi|loki-ruler|service-model-operator|tempo-block-builder"} | count_over_time())`
 		req := newReq(query)
 		runFullPipeline(b, req)
 	})
