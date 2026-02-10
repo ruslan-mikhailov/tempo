@@ -628,6 +628,134 @@ Uses `CompileMetricsQueryRange` with math expression query against vparquet4 sto
 
 ## Future Enhancements (Out of Scope)
 
-1. Apply math operations on fragment results at L2/L3 (frontend aggregation)
+1. ~~Apply math operations on fragment results at L2/L3 (frontend aggregation)~~ Now handled (see next section).
 2. Store `MetricsMathOp` tree in `MetricsEvaluator` for higher-level evaluation
 3. `metricsSecondStage` on math expressions (e.g., `({} | rate()) / ({} | count_over_time()) | topk(10)`)
+
+---
+
+# MetricsMath Support in CompileMetricsQueryRangeNonRaw (L2/L3)
+
+## Background
+
+With L1 (`CompileMetricsQueryRange`) producing fragment-labeled series for MetricsMath queries, the next step is making `CompileMetricsQueryRangeNonRaw` handle these at L2 and L3:
+
+- **L2 (AggregateModeSum)**: Route incoming fragment-labeled series to per-fragment pipelines, aggregate (sum) within each fragment, return fragment-labeled results.
+- **L3 (AggregateModeFinal)**: Same routing and aggregation, then apply the math tree on fragment results to produce the final combined series (without `_meta_query_fragment` labels).
+
+The full pipeline for a query like `({status=error} | count_over_time()) / ({} | count_over_time())`:
+
+```
+L1: two fragment series (error=N, all=M)
+L2: summed from multiple sources (error=2N, all=2M), still fragment-labeled
+L3: apply division: 2N/2M -> final series (no fragment labels)
+```
+
+## Status
+
+All items implemented and tested.
+
+- [x] **math-eval-funcs**: Add `applyMetricsOp`, `applySeriesSetOp`, `evaluateMetricsMathOp`, `evaluateMetricsMathExpr`, `stripFragmentLabel`
+- [x] **extend-frontend-evaluator**: Add `fragmentPipelines` and `metricsMath` fields to `MetricsFrontendEvaluator`
+- [x] **compile-nonraw-helper**: Add `compileMetricsMathNonRaw` helper method
+- [x] **modify-compile-nonraw**: Modify `CompileMetricsQueryRangeNonRaw` to detect MetricsMath and branch
+- [x] **modify-observe-results-length**: Modify `ObserveSeries`, `Results`, and `Length` for MetricsMath
+- [x] **update-tests**: Update `TestTempoDBBatchQueryRange` with L2 and L3 assertions
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph L1 [L1 - CompileMetricsQueryRange]
+        L1Out["Fragment-labeled series: _meta_query_fragment on each series"]
+    end
+
+    subgraph L2 ["L2 - CompileMetricsQueryRangeNonRaw(Sum)"]
+        Route2["Route series by _meta_query_fragment"]
+        Strip2["Strip _meta_query_fragment label"]
+        FragPipeline2A["Fragment A pipeline (Sum mode)"]
+        FragPipeline2B["Fragment B pipeline (Sum mode)"]
+        Relabel2["Re-add _meta_query_fragment labels"]
+        L2Out["Fragment-labeled series (summed)"]
+    end
+
+    subgraph L3 ["L3 - CompileMetricsQueryRangeNonRaw(Final)"]
+        Route3["Route series by _meta_query_fragment"]
+        Strip3["Strip _meta_query_fragment label"]
+        FragPipeline3A["Fragment A pipeline (Final mode)"]
+        FragPipeline3B["Fragment B pipeline (Final mode)"]
+        MathEval["evaluateMetricsMathOp: apply math tree"]
+        L3Out["Final combined series (no fragment labels)"]
+    end
+
+    L1Out --> Route2 --> Strip2
+    Strip2 --> FragPipeline2A
+    Strip2 --> FragPipeline2B
+    FragPipeline2A --> Relabel2
+    FragPipeline2B --> Relabel2
+    Relabel2 --> L2Out
+
+    L2Out --> Route3 --> Strip3
+    Strip3 --> FragPipeline3A
+    Strip3 --> FragPipeline3B
+    FragPipeline3A --> MathEval
+    FragPipeline3B --> MathEval
+    MathEval --> L3Out
+```
+
+## Implementation
+
+### 1. Math evaluation functions (`pkg/traceql/engine_metrics.go`)
+
+- `applyMetricsOp(op, a, b)` -- scalar math with div-by-zero handling (returns NaN)
+- `applySeriesSetOp(op, lhs, rhs)` -- inner-join two SeriesSets by `SeriesMapKey`, element-wise on Values
+- `evaluateMetricsMathOp(math, fragmentResults)` -- recursive math tree evaluation
+- `evaluateMetricsMathExpr(expr, fragmentResults)` -- leaf lookup or nested math recurse
+- `stripFragmentLabel(ts)` -- strip `_meta_query_fragment` from proto TimeSeries, return (fragmentID, strippedTS)
+
+### 2. MetricsFrontendEvaluator extensions
+
+```go
+type MetricsFrontendEvaluator struct {
+    // ... existing fields ...
+    fragmentPipelines map[string]firstStageElement  // fragment ID -> pipeline
+    metricsMath       *MetricsMathOp                // math tree, set only in Final mode
+}
+```
+
+### 3. compileMetricsMathNonRaw helper
+
+Extracts leaves from MetricsMathOp tree, creates per-fragment pipeline initialized with the given mode (Sum or Final), stores `metricsMath` only when mode is Final.
+
+### 4. CompileMetricsQueryRangeNonRaw modification
+
+Captures `expr` from `Compile()`, detects `expr.MetricsMath != nil`, delegates to `compileMetricsMathNonRaw`.
+
+### 5. ObserveSeries modification
+
+Routes incoming series to fragment pipelines based on `_meta_query_fragment` label value. Strips the label before feeding to pipelines. Batches series per fragment for efficiency.
+
+### 6. Results modification
+
+- **Sum mode** (`metricsMath == nil`): re-add `_meta_query_fragment` labels to each fragment's results
+- **Final mode** (`metricsMath != nil`): call `evaluateMetricsMathOp` to apply math tree, return combined series
+
+## Files Modified
+
+| File | Changes |
+|------|---------|
+| `pkg/traceql/engine_metrics.go` | Math eval functions, `MetricsFrontendEvaluator` extensions, `compileMetricsMathNonRaw`, modified `CompileMetricsQueryRangeNonRaw`/`ObserveSeries`/`Results`/`Length` |
+| `tempodb/tempodb_metrics_test.go` | Updated `TestTempoDBBatchQueryRange` with L2 and L3 assertions |
+
+## Testing
+
+### TestTempoDBBatchQueryRange (updated)
+
+- **basic_batch_query** (`even / all`): L1: even=25, all=50. L2 (observed twice): even=50, all=100. L3: 50/100 = 0.5 (single unlabeled series).
+- **overlapping_matches** (`(even + odd) + all`): L1: even=25, odd=25, all=50. L2: even=50, odd=50, all=100. L3: (50+50)+100 = 200 (single unlabeled series).
+
+## Backward Compatibility
+
+- Existing `CompileMetricsQueryRangeNonRaw` single-query behavior is unchanged
+- `ObserveSeries`, `Results`, `Length` fall through to existing paths when `fragmentPipelines` is empty
+- No changes to protobuf, storage layer, or API contracts

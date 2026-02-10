@@ -945,9 +945,14 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 		return nil, fmt.Errorf("step required")
 	}
 
-	_, _, metricsPipeline, metricsSecondStage, _, err := Compile(req.Query)
+	expr, _, metricsPipeline, metricsSecondStage, _, err := Compile(req.Query)
 	if err != nil {
 		return nil, fmt.Errorf("compiling query: %w", err)
+	}
+
+	// MetricsMath expressions use per-fragment pipelines for L2/L3 aggregation.
+	if expr.MetricsMath != nil {
+		return e.compileMetricsMathNonRaw(req, expr, mode)
 	}
 
 	// for metrics queries, we need a metrics pipeline
@@ -1194,6 +1199,127 @@ func (e *Engine) compileMetricsMathQueryRange(
 	}
 
 	return me, nil
+}
+
+// compileMetricsMathNonRaw compiles a MetricsMath expression for L2/L3 aggregation.
+// It extracts leaf metrics queries, creates a per-fragment pipeline for each,
+// and stores the math tree for Final mode evaluation.
+func (e *Engine) compileMetricsMathNonRaw(
+	req *tempopb.QueryRangeRequest,
+	expr *RootExpr,
+	mode AggregateMode,
+) (*MetricsFrontendEvaluator, error) {
+	leaves := collectLeafMetrics(expr)
+	if len(leaves) == 0 {
+		return nil, fmt.Errorf("no metrics queries found in expression")
+	}
+
+	fragmentPipelines := make(map[string]firstStageElement, len(leaves))
+	for _, leaf := range leaves {
+		leaf.MetricsPipeline.init(req, mode)
+		fragmentPipelines[leaf.String()] = leaf.MetricsPipeline
+	}
+
+	mfe := &MetricsFrontendEvaluator{
+		fragmentPipelines: fragmentPipelines,
+	}
+
+	if mode == AggregateModeFinal {
+		mfe.metricsMath = expr.MetricsMath
+	}
+
+	return mfe, nil
+}
+
+// stripFragmentLabel reads and removes the _meta_query_fragment label from a proto
+// TimeSeries. Returns the fragment ID and a new TimeSeries that shares the original's
+// Samples and Exemplars slices. Returns ("", nil) if the label is absent.
+func stripFragmentLabel(ts *tempopb.TimeSeries) (string, *tempopb.TimeSeries) {
+	var fragmentID string
+	labels := make([]commonv1proto.KeyValue, 0, len(ts.Labels))
+	for _, l := range ts.Labels {
+		if l.Key == internalLabelQueryFragment {
+			fragmentID = l.Value.GetStringValue()
+			continue
+		}
+		labels = append(labels, l)
+	}
+	if fragmentID == "" {
+		return "", nil
+	}
+	return fragmentID, &tempopb.TimeSeries{
+		Labels:    labels,
+		Samples:   ts.Samples,
+		Exemplars: ts.Exemplars,
+	}
+}
+
+// evaluateMetricsMathOp recursively evaluates a MetricsMathOp tree using fragment results.
+func evaluateMetricsMathOp(math *MetricsMathOp, fragmentResults map[string]SeriesSet) SeriesSet {
+	lhs := evaluateMetricsMathExpr(math.LHS, fragmentResults)
+	rhs := evaluateMetricsMathExpr(math.RHS, fragmentResults)
+	return applySeriesSetOp(math.Op, lhs, rhs)
+}
+
+// evaluateMetricsMathExpr returns the SeriesSet for a RootExpr node in the math tree.
+// For leaves (MetricsMath == nil), returns the fragment's results.
+// For nested math (MetricsMath != nil), recurses via evaluateMetricsMathOp.
+func evaluateMetricsMathExpr(expr *RootExpr, fragmentResults map[string]SeriesSet) SeriesSet {
+	if expr.MetricsMath != nil {
+		return evaluateMetricsMathOp(expr.MetricsMath, fragmentResults)
+	}
+	return fragmentResults[expr.String()]
+}
+
+// applySeriesSetOp performs a binary math operation on two SeriesSets using inner join.
+// Series are matched by SeriesMapKey (labels). Only series present in both LHS and RHS
+// produce output. Values are combined element-wise using the given operator.
+func applySeriesSetOp(op Operator, lhs, rhs SeriesSet) SeriesSet {
+	result := make(SeriesSet, len(lhs))
+
+	for key, lhsTS := range lhs {
+		rhsTS, ok := rhs[key]
+		if !ok {
+			continue // No matching series in RHS (inner join)
+		}
+
+		// Apply operation element-wise on Values
+		n := len(lhsTS.Values)
+		if len(rhsTS.Values) < n {
+			n = len(rhsTS.Values)
+		}
+		values := make([]float64, n)
+		for i := 0; i < n; i++ {
+			values[i] = applyMetricsOp(op, lhsTS.Values[i], rhsTS.Values[i])
+		}
+
+		result[key] = TimeSeries{
+			Labels: lhsTS.Labels,
+			Values: values,
+		}
+	}
+
+	return result
+}
+
+// applyMetricsOp applies a single arithmetic operation on two float64 values.
+// Division by zero returns NaN. Go's native NaN propagation handles NaN inputs.
+func applyMetricsOp(op Operator, a, b float64) float64 {
+	switch op {
+	case OpAdd:
+		return a + b
+	case OpSub:
+		return a - b
+	case OpMult:
+		return a * b
+	case OpDiv:
+		if b == 0 {
+			return math.NaN()
+		}
+		return a / b
+	default:
+		return math.NaN()
+	}
 }
 
 // CompileBatchMetricsQueryRange compiles multiple metrics queries for batch processing.
@@ -1678,18 +1804,58 @@ type MetricsFrontendEvaluator struct {
 	mtx                sync.Mutex
 	metricsPipeline    firstStageElement
 	metricsSecondStage secondStageElement
+
+	// MetricsMath L2/L3 support.
+	// fragmentPipelines maps fragment ID -> pipeline for routing incoming series.
+	// When non-empty, ObserveSeries routes by _meta_query_fragment label.
+	fragmentPipelines map[string]firstStageElement
+	// metricsMath is the math tree, set only in Final mode.
+	// When set, Results() applies the math on fragment results.
+	metricsMath *MetricsMathOp
 }
 
 func (m *MetricsFrontendEvaluator) ObserveSeries(in []*tempopb.TimeSeries) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
+	if len(m.fragmentPipelines) > 0 {
+		m.observeSeriesFragments(in)
+		return
+	}
+
 	m.metricsPipeline.observeSeries(in)
+}
+
+// observeSeriesFragments routes incoming series to the correct fragment pipeline
+// based on the _meta_query_fragment label. The label is stripped before feeding
+// to the pipeline so it doesn't pollute internal MapKeys.
+func (m *MetricsFrontendEvaluator) observeSeriesFragments(in []*tempopb.TimeSeries) {
+	// Batch series per fragment for efficiency
+	grouped := make(map[string][]*tempopb.TimeSeries, len(m.fragmentPipelines))
+
+	for _, ts := range in {
+		fragmentID, strippedTS := stripFragmentLabel(ts)
+		if fragmentID == "" {
+			continue // no _meta_query_fragment label
+		}
+		if _, ok := m.fragmentPipelines[fragmentID]; !ok {
+			continue // unknown fragment
+		}
+		grouped[fragmentID] = append(grouped[fragmentID], strippedTS)
+	}
+
+	for id, batch := range grouped {
+		m.fragmentPipelines[id].observeSeries(batch)
+	}
 }
 
 func (m *MetricsFrontendEvaluator) Results() SeriesSet {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
+
+	if len(m.fragmentPipelines) > 0 {
+		return m.metricsMathResults()
+	}
 
 	// Job results are not scaled by sampling, but this is here for the interface.
 	results := m.metricsPipeline.result(1.0)
@@ -1704,9 +1870,48 @@ func (m *MetricsFrontendEvaluator) Results() SeriesSet {
 	return results
 }
 
+// metricsMathResults returns results for MetricsMath queries.
+// In Final mode (metricsMath != nil): applies the math tree and returns combined series.
+// In Sum mode (metricsMath == nil): returns fragment-labeled series.
+func (m *MetricsFrontendEvaluator) metricsMathResults() SeriesSet {
+	// Collect results from each fragment pipeline
+	fragmentResults := make(map[string]SeriesSet, len(m.fragmentPipelines))
+	for id, pipeline := range m.fragmentPipelines {
+		fragmentResults[id] = pipeline.result(1.0)
+	}
+
+	if m.metricsMath != nil {
+		// Final mode: apply math tree to produce combined series
+		return evaluateMetricsMathOp(m.metricsMath, fragmentResults)
+	}
+
+	// Sum mode: return fragment-labeled series
+	combined := make(SeriesSet)
+	for id, ss := range fragmentResults {
+		fragLabel := Label{
+			Name:  internalLabelQueryFragment,
+			Value: NewStaticString(id),
+		}
+		for _, series := range ss {
+			series.Labels = series.Labels.Add(fragLabel)
+			newKey := series.Labels.MapKey()
+			combined[newKey] = series
+		}
+	}
+	return combined
+}
+
 func (m *MetricsFrontendEvaluator) Length() int {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
+
+	if len(m.fragmentPipelines) > 0 {
+		total := 0
+		for _, p := range m.fragmentPipelines {
+			total += p.length()
+		}
+		return total
+	}
 
 	return m.metricsPipeline.length()
 }

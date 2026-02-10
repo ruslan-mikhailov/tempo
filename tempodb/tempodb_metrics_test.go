@@ -1162,9 +1162,10 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 	})
 
 	t.Run("basic_batch_query", func(t *testing.T) {
-		// Test metrics math query compiled via CompileMetricsQueryRange:
+		// Test metrics math query through L1, L2, L3 pipeline:
 		// Fragment 1: only even service spans (25 spans)
 		// Fragment 2: all spans (50 spans)
+		// Math: even / all
 		req := &tempopb.QueryRangeRequest{
 			Start: 1,
 			End:   50 * uint64(time.Second),
@@ -1173,6 +1174,8 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 		}
 
 		e := traceql.NewEngine()
+
+		// Level 1: raw span processing
 		eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
 		require.NoError(t, err)
 
@@ -1182,10 +1185,9 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 		actual := eval.Results().ToProto(req)
 		sortTimeSeries(actual)
 
-		// Should have 2 time series, one for each fragment
-		require.Len(t, actual, 2, "Expected 2 time series (one per fragment)")
+		// L1: Should have 2 fragment-labeled series
+		require.Len(t, actual, 2, "L1: Expected 2 time series (one per fragment)")
 
-		// Verify each series has the _meta_query_fragment label
 		for _, ts := range actual {
 			found := false
 			for _, l := range ts.Labels {
@@ -1194,11 +1196,9 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 					break
 				}
 			}
-			require.True(t, found, "Expected _meta_query_fragment label in series")
+			require.True(t, found, "L1: Expected _meta_query_fragment label in series")
 		}
 
-		// Find series by fragment (leaf.String() uses canonical format:
-		// backtick-quoted strings, spaces around operators, {} becomes { true })
 		var evenSeries, allSeries *tempopb.TimeSeries
 		for _, ts := range actual {
 			for _, l := range ts.Labels {
@@ -1212,21 +1212,62 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 			}
 		}
 
-		require.NotNil(t, evenSeries, "Expected series for even service filter")
-		require.NotNil(t, allSeries, "Expected series for all spans filter")
-
-		// Verify count values
-		// Even spans: 25 (2, 4, 6, ..., 50)
-		// All spans: 50
+		require.NotNil(t, evenSeries, "L1: Expected series for even service filter")
+		require.NotNil(t, allSeries, "L1: Expected series for all spans filter")
 		require.Len(t, evenSeries.Samples, 1)
 		require.Len(t, allSeries.Samples, 1)
-		require.InDelta(t, 25.0, evenSeries.Samples[0].Value, 0.1, "Expected 25 even spans")
-		require.InDelta(t, 50.0, allSeries.Samples[0].Value, 0.1, "Expected 50 total spans")
+		require.InDelta(t, 25.0, evenSeries.Samples[0].Value, 0.1, "L1: Expected 25 even spans")
+		require.InDelta(t, 50.0, allSeries.Samples[0].Value, 0.1, "L1: Expected 50 total spans")
+
+		// Level 2: sum mode (emulate merging from two sources)
+		evalLevel2, err := e.CompileMetricsQueryRangeNonRaw(req, traceql.AggregateModeSum)
+		require.NoError(t, err)
+		evalLevel2.ObserveSeries(actual)
+		evalLevel2.ObserveSeries(actual) // observe twice to emulate two sources
+		actual = evalLevel2.Results().ToProto(req)
+		sortTimeSeries(actual)
+
+		// L2: Should still have 2 fragment-labeled series with doubled values
+		require.Len(t, actual, 2, "L2: Expected 2 time series (one per fragment)")
+
+		evenSeries = nil
+		allSeries = nil
+		for _, ts := range actual {
+			for _, l := range ts.Labels {
+				if l.Key == "_meta_query_fragment" {
+					if l.Value.GetStringValue() == "{ .service.name = `even` } | count_over_time()" {
+						evenSeries = ts
+					} else if l.Value.GetStringValue() == "{ true } | count_over_time()" {
+						allSeries = ts
+					}
+				}
+			}
+		}
+
+		require.NotNil(t, evenSeries, "L2: Expected series for even service filter")
+		require.NotNil(t, allSeries, "L2: Expected series for all spans filter")
+		require.Len(t, evenSeries.Samples, 1)
+		require.Len(t, allSeries.Samples, 1)
+		require.InDelta(t, 50.0, evenSeries.Samples[0].Value, 0.1, "L2: Expected 50 even spans (25*2)")
+		require.InDelta(t, 100.0, allSeries.Samples[0].Value, 0.1, "L2: Expected 100 total spans (50*2)")
+
+		// Level 3: final mode (apply math: 50/100 = 0.5)
+		evalLevel3, err := e.CompileMetricsQueryRangeNonRaw(req, traceql.AggregateModeFinal)
+		require.NoError(t, err)
+		evalLevel3.ObserveSeries(actual)
+		actual = evalLevel3.Results().ToProto(req)
+
+		// L3: Should have 1 series with the division result and no fragment labels
+		require.Len(t, actual, 1, "L3: Expected 1 time series (math result)")
+		for _, l := range actual[0].Labels {
+			require.NotEqual(t, "_meta_query_fragment", l.Key, "L3: Should not have _meta_query_fragment label")
+		}
+		require.Len(t, actual[0].Samples, 1)
+		require.InDelta(t, 0.5, actual[0].Samples[0].Value, 0.01, "L3: Expected 50/100 = 0.5")
 	})
 
 	t.Run("overlapping_matches", func(t *testing.T) {
-		// Test that spans matching multiple fragments are counted in both.
-		// Uses a 3-leaf math expression: (even + odd) + all
+		// Test L1/L2/L3 pipeline with 3-leaf math expression: (even + odd) + all
 		req := &tempopb.QueryRangeRequest{
 			Start: 1,
 			End:   50 * uint64(time.Second),
@@ -1235,6 +1276,8 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 		}
 
 		e := traceql.NewEngine()
+
+		// Level 1
 		eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
 		require.NoError(t, err)
 
@@ -1242,9 +1285,8 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 		require.NoError(t, err)
 
 		actual := eval.Results().ToProto(req)
-		require.Len(t, actual, 3, "Expected 3 time series")
+		require.Len(t, actual, 3, "L1: Expected 3 time series")
 
-		// Sum of even + odd should equal total
 		var evenCount, oddCount, totalCount float64
 		for _, ts := range actual {
 			for _, l := range ts.Labels {
@@ -1261,10 +1303,52 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 			}
 		}
 
-		require.InDelta(t, 25.0, evenCount, 0.1)
-		require.InDelta(t, 25.0, oddCount, 0.1)
-		require.InDelta(t, 50.0, totalCount, 0.1)
-		require.InDelta(t, totalCount, evenCount+oddCount, 0.1, "even + odd should equal total")
+		require.InDelta(t, 25.0, evenCount, 0.1, "L1: even")
+		require.InDelta(t, 25.0, oddCount, 0.1, "L1: odd")
+		require.InDelta(t, 50.0, totalCount, 0.1, "L1: all")
+		require.InDelta(t, totalCount, evenCount+oddCount, 0.1, "L1: even + odd should equal total")
+
+		// Level 2: sum mode (observe twice)
+		evalLevel2, err := e.CompileMetricsQueryRangeNonRaw(req, traceql.AggregateModeSum)
+		require.NoError(t, err)
+		evalLevel2.ObserveSeries(actual)
+		evalLevel2.ObserveSeries(actual)
+		actual = evalLevel2.Results().ToProto(req)
+
+		require.Len(t, actual, 3, "L2: Expected 3 time series")
+
+		evenCount, oddCount, totalCount = 0, 0, 0
+		for _, ts := range actual {
+			for _, l := range ts.Labels {
+				if l.Key == "_meta_query_fragment" {
+					switch l.Value.GetStringValue() {
+					case "{ .service.name = `even` } | count_over_time()":
+						evenCount = ts.Samples[0].Value
+					case "{ .service.name = `odd` } | count_over_time()":
+						oddCount = ts.Samples[0].Value
+					case "{ true } | count_over_time()":
+						totalCount = ts.Samples[0].Value
+					}
+				}
+			}
+		}
+
+		require.InDelta(t, 50.0, evenCount, 0.1, "L2: even (25*2)")
+		require.InDelta(t, 50.0, oddCount, 0.1, "L2: odd (25*2)")
+		require.InDelta(t, 100.0, totalCount, 0.1, "L2: all (50*2)")
+
+		// Level 3: final mode (apply math: (50+50)+100 = 200)
+		evalLevel3, err := e.CompileMetricsQueryRangeNonRaw(req, traceql.AggregateModeFinal)
+		require.NoError(t, err)
+		evalLevel3.ObserveSeries(actual)
+		actual = evalLevel3.Results().ToProto(req)
+
+		require.Len(t, actual, 1, "L3: Expected 1 time series (math result)")
+		for _, l := range actual[0].Labels {
+			require.NotEqual(t, "_meta_query_fragment", l.Key, "L3: Should not have _meta_query_fragment label")
+		}
+		require.Len(t, actual[0].Samples, 1)
+		require.InDelta(t, 200.0, actual[0].Samples[0].Value, 0.1, "L3: Expected (50+50)+100 = 200")
 	})
 
 	t.Run("validation_errors", func(t *testing.T) {
