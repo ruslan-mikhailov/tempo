@@ -747,12 +747,39 @@ Routes incoming series to fragment pipelines based on `_meta_query_fragment` lab
 | `pkg/traceql/engine_metrics.go` | Math eval functions, `MetricsFrontendEvaluator` extensions, `compileMetricsMathNonRaw`, modified `CompileMetricsQueryRangeNonRaw`/`ObserveSeries`/`Results`/`Length` |
 | `tempodb/tempodb_metrics_test.go` | Updated `TestTempoDBBatchQueryRange` with L2 and L3 assertions |
 
+## Bug Fix: Span Start Time in Batch Path
+
+### Problem
+
+MetricsMath queries without a `{}` fragment returned zeroes. For example:
+```
+({resource.service.name = "postgres"} | count_over_time()) + ({resource.service.name != "postgres"} | count_over_time())
+```
+
+### Root Cause
+
+In `compileMetricsMathQueryRange` and `CompileBatchMetricsQueryRange`, `IntrinsicSpanStartTimeAttribute` was
+added to `SecondPassConditions`. However, the batch path has no `SecondPass` callback, so the storage layer
+(vparquet5 `block_traceql.go:1584`) skips the second pass entirely when `SecondPass` is nil. This meant the
+span start time column was never fetched, `StartTimeUnixNanos()` returned 0 for all spans, and all spans
+failed the time check in `Do()` (`0 <= req.Start` is always true).
+
+Existing tests masked this because the `{}` fragment (parsed as `{ true }`) has special handling in
+`SpansetFilter.extractConditions` that adds `IntrinsicSpanStartTime` to first-pass `Conditions`.
+
+### Fix
+
+Changed both `compileMetricsMathQueryRange` and `CompileBatchMetricsQueryRange` to add
+`IntrinsicSpanStartTimeAttribute` to `Conditions` (first pass) instead of `SecondPassConditions` (second pass).
+This ensures the span start time column is always read in the first pass, which is the only pass in the batch path.
+
 ## Testing
 
 ### TestTempoDBBatchQueryRange (updated)
 
 - **basic_batch_query** (`even / all`): L1: even=25, all=50. L2 (observed twice): even=50, all=100. L3: 50/100 = 0.5 (single unlabeled series).
 - **overlapping_matches** (`(even + odd) + all`): L1: even=25, odd=25, all=50. L2: even=50, odd=50, all=100. L3: (50+50)+100 = 200 (single unlabeled series).
+- **no_match_all_fragment** (`even + odd`, no `{}` fragment): Regression test for the span start time bug. L1: even=25, odd=25. L2: even=50, odd=50. L3: 50+50 = 100.
 
 ## Backward Compatibility
 

@@ -1351,6 +1351,88 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 		require.InDelta(t, 200.0, actual[0].Samples[0].Value, 0.1, "L3: Expected (50+50)+100 = 200")
 	})
 
+	t.Run("no_match_all_fragment", func(t *testing.T) {
+		// Regression test: queries without a {} fragment previously returned zeroes
+		// because IntrinsicSpanStartTime was added to SecondPassConditions instead
+		// of Conditions. With no SecondPass callback in the batch path, the storage
+		// skipped the second pass entirely, leaving StartTimeUnixNanos() = 0 for
+		// all spans, causing them all to be filtered out by the time check.
+		req := &tempopb.QueryRangeRequest{
+			Start: 1,
+			End:   50 * uint64(time.Second),
+			Step:  50 * uint64(time.Second),
+			Query: `({ .service.name="even" } | count_over_time()) + ({ .service.name="odd" } | count_over_time())`,
+		}
+
+		e := traceql.NewEngine()
+
+		// Level 1
+		eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
+		require.NoError(t, err)
+
+		err = eval.Do(ctx, f, 0, 0, 0)
+		require.NoError(t, err)
+
+		actual := eval.Results().ToProto(req)
+		require.Len(t, actual, 2, "L1: Expected 2 time series")
+
+		var evenCount, oddCount float64
+		for _, ts := range actual {
+			for _, l := range ts.Labels {
+				if l.Key == "_meta_query_fragment" {
+					switch l.Value.GetStringValue() {
+					case "{ .service.name = `even` } | count_over_time()":
+						evenCount = ts.Samples[0].Value
+					case "{ .service.name = `odd` } | count_over_time()":
+						oddCount = ts.Samples[0].Value
+					}
+				}
+			}
+		}
+
+		require.InDelta(t, 25.0, evenCount, 0.1, "L1: even count must be 25")
+		require.InDelta(t, 25.0, oddCount, 0.1, "L1: odd count must be 25")
+
+		// Level 2: sum mode (observe twice)
+		evalLevel2, err := e.CompileMetricsQueryRangeNonRaw(req, traceql.AggregateModeSum)
+		require.NoError(t, err)
+		evalLevel2.ObserveSeries(actual)
+		evalLevel2.ObserveSeries(actual)
+		actual = evalLevel2.Results().ToProto(req)
+
+		require.Len(t, actual, 2, "L2: Expected 2 time series")
+
+		evenCount, oddCount = 0, 0
+		for _, ts := range actual {
+			for _, l := range ts.Labels {
+				if l.Key == "_meta_query_fragment" {
+					switch l.Value.GetStringValue() {
+					case "{ .service.name = `even` } | count_over_time()":
+						evenCount = ts.Samples[0].Value
+					case "{ .service.name = `odd` } | count_over_time()":
+						oddCount = ts.Samples[0].Value
+					}
+				}
+			}
+		}
+
+		require.InDelta(t, 50.0, evenCount, 0.1, "L2: even (25*2)")
+		require.InDelta(t, 50.0, oddCount, 0.1, "L2: odd (25*2)")
+
+		// Level 3: final mode (apply math: 50+50 = 100)
+		evalLevel3, err := e.CompileMetricsQueryRangeNonRaw(req, traceql.AggregateModeFinal)
+		require.NoError(t, err)
+		evalLevel3.ObserveSeries(actual)
+		actual = evalLevel3.Results().ToProto(req)
+
+		require.Len(t, actual, 1, "L3: Expected 1 time series (math result)")
+		for _, l := range actual[0].Labels {
+			require.NotEqual(t, "_meta_query_fragment", l.Key, "L3: Should not have _meta_query_fragment label")
+		}
+		require.Len(t, actual[0].Samples, 1)
+		require.InDelta(t, 100.0, actual[0].Samples[0].Value, 0.1, "L3: Expected 50+50 = 100")
+	})
+
 	t.Run("validation_errors", func(t *testing.T) {
 		e := traceql.NewEngine()
 

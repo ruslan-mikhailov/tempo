@@ -1192,9 +1192,11 @@ func (e *Engine) compileMetricsMathQueryRange(
 		checkTime:         true,
 	}
 
-	// Add span start time for time filtering in Do()
+	// Add span start time to first-pass conditions for time filtering in Do().
+	// Must be in Conditions (not SecondPassConditions) because the batch path
+	// has no SecondPass callback, so the storage layer skips the second pass entirely.
 	if !mergedReq.HasAttribute(IntrinsicSpanStartTimeAttribute) {
-		mergedReq.SecondPassConditions = append(mergedReq.SecondPassConditions,
+		mergedReq.Conditions = append(mergedReq.Conditions,
 			Condition{Attribute: IntrinsicSpanStartTimeAttribute})
 	}
 
@@ -1398,9 +1400,11 @@ func (e *Engine) CompileBatchMetricsQueryRange(
 		checkTime:         true,
 	}
 
-	// Add required conditions for time filtering
+	// Add span start time to first-pass conditions for time filtering in Do().
+	// Must be in Conditions (not SecondPassConditions) because the batch path
+	// has no SecondPass callback, so the storage layer skips the second pass entirely.
 	if !mergedReq.HasAttribute(IntrinsicSpanStartTimeAttribute) {
-		mergedReq.SecondPassConditions = append(mergedReq.SecondPassConditions,
+		mergedReq.Conditions = append(mergedReq.Conditions,
 			Condition{Attribute: IntrinsicSpanStartTimeAttribute})
 	}
 
