@@ -1680,8 +1680,7 @@ func BenchmarkMetricsQueryRange(b *testing.B) {
 			require.NoError(b, err)
 
 			evalL3.ObserveSeries(l2Series)
-			res := evalL3.Results()
-			_ = res
+			_ = evalL3.Results()
 		}
 	}
 
