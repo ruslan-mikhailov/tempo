@@ -1162,23 +1162,18 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 	})
 
 	t.Run("basic_batch_query", func(t *testing.T) {
-		// Test batch query with two fragments:
+		// Test metrics math query compiled via CompileMetricsQueryRange:
 		// Fragment 1: only even service spans (25 spans)
 		// Fragment 2: all spans (50 spans)
 		req := &tempopb.QueryRangeRequest{
 			Start: 1,
 			End:   50 * uint64(time.Second),
 			Step:  50 * uint64(time.Second),
-			Query: `{} | count_over_time()`, // Not used directly, but needed for request validation
-		}
-
-		queries := []string{
-			`{ .service.name="even" } | count_over_time()`,
-			`{ } | count_over_time()`,
+			Query: `({ .service.name="even" } | count_over_time()) / ({ } | count_over_time())`,
 		}
 
 		e := traceql.NewEngine()
-		eval, err := e.CompileBatchMetricsQueryRange(req, queries, 0, 0, false)
+		eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
 		require.NoError(t, err)
 
 		err = eval.Do(ctx, f, 0, 0, 0)
@@ -1202,14 +1197,15 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 			require.True(t, found, "Expected _meta_query_fragment label in series")
 		}
 
-		// Find series by fragment
+		// Find series by fragment (leaf.String() uses canonical format:
+		// backtick-quoted strings, spaces around operators, {} becomes { true })
 		var evenSeries, allSeries *tempopb.TimeSeries
 		for _, ts := range actual {
 			for _, l := range ts.Labels {
 				if l.Key == "_meta_query_fragment" {
-					if l.Value.GetStringValue() == `{ .service.name="even" } | count_over_time()` {
+					if l.Value.GetStringValue() == "{ .service.name = `even` } | count_over_time()" {
 						evenSeries = ts
-					} else if l.Value.GetStringValue() == `{ } | count_over_time()` {
+					} else if l.Value.GetStringValue() == "{ true } | count_over_time()" {
 						allSeries = ts
 					}
 				}
@@ -1229,22 +1225,17 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 	})
 
 	t.Run("overlapping_matches", func(t *testing.T) {
-		// Test that spans matching multiple fragments are counted in both
+		// Test that spans matching multiple fragments are counted in both.
+		// Uses a 3-leaf math expression: (even + odd) + all
 		req := &tempopb.QueryRangeRequest{
 			Start: 1,
 			End:   50 * uint64(time.Second),
 			Step:  50 * uint64(time.Second),
-			Query: `{} | count_over_time()`,
-		}
-
-		queries := []string{
-			`{ .service.name="even" } | count_over_time()`,
-			`{ .service.name="odd" } | count_over_time()`,
-			`{ } | count_over_time()`,
+			Query: `(({ .service.name="even" } | count_over_time()) + ({ .service.name="odd" } | count_over_time())) + ({ } | count_over_time())`,
 		}
 
 		e := traceql.NewEngine()
-		eval, err := e.CompileBatchMetricsQueryRange(req, queries, 0, 0, false)
+		eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
 		require.NoError(t, err)
 
 		err = eval.Do(ctx, f, 0, 0, 0)
@@ -1259,11 +1250,11 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 			for _, l := range ts.Labels {
 				if l.Key == "_meta_query_fragment" {
 					switch l.Value.GetStringValue() {
-					case `{ .service.name="even" } | count_over_time()`:
+					case "{ .service.name = `even` } | count_over_time()":
 						evenCount = ts.Samples[0].Value
-					case `{ .service.name="odd" } | count_over_time()`:
+					case "{ .service.name = `odd` } | count_over_time()":
 						oddCount = ts.Samples[0].Value
-					case `{ } | count_over_time()`:
+					case "{ true } | count_over_time()":
 						totalCount = ts.Samples[0].Value
 					}
 				}
@@ -1277,27 +1268,22 @@ func TestTempoDBBatchQueryRange(t *testing.T) {
 	})
 
 	t.Run("validation_errors", func(t *testing.T) {
+		e := traceql.NewEngine()
+
+		// Test: non-metrics query
 		req := &tempopb.QueryRangeRequest{
 			Start: 1,
 			End:   50 * uint64(time.Second),
 			Step:  50 * uint64(time.Second),
-			Query: `{} | count_over_time()`,
+			Query: `{ .service.name="test" }`,
 		}
-
-		e := traceql.NewEngine()
-
-		// Test: empty queries
-		_, err := e.CompileBatchMetricsQueryRange(req, []string{}, 0, 0, false)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "at least one query required")
-
-		// Test: non-metrics query
-		_, err = e.CompileBatchMetricsQueryRange(req, []string{`{ .service.name="test" }`}, 0, 0, false)
+		_, err := e.CompileMetricsQueryRange(req, 0, 0, false)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "not a metrics query")
 
 		// Test: invalid query syntax
-		_, err = e.CompileBatchMetricsQueryRange(req, []string{`{ invalid }`}, 0, 0, false)
+		req.Query = `{ invalid }`
+		_, err = e.CompileMetricsQueryRange(req, 0, 0, false)
 		require.Error(t, err)
 	})
 }
@@ -1389,21 +1375,17 @@ func TestTempoDBBatchQueryRangeFallback(t *testing.T) {
 	})
 
 	// Test that fallback works - vparquet4 returns 0 for MatchedGroups,
-	// so the evaluator should fall back to direct filter evaluation
+	// so the evaluator should fall back to direct filter evaluation.
+	// Uses CompileMetricsQueryRange with a math expression query.
 	req := &tempopb.QueryRangeRequest{
 		Start: 1,
 		End:   20 * uint64(time.Second),
 		Step:  20 * uint64(time.Second),
-		Query: `{} | count_over_time()`,
-	}
-
-	queries := []string{
-		`{ .service.name="even" } | count_over_time()`,
-		`{ } | count_over_time()`,
+		Query: `({ .service.name="even" } | count_over_time()) / ({ } | count_over_time())`,
 	}
 
 	e := traceql.NewEngine()
-	eval, err := e.CompileBatchMetricsQueryRange(req, queries, 0, 0, false)
+	eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
 	require.NoError(t, err)
 
 	err = eval.Do(ctx, f, 0, 0, 0)
@@ -1418,9 +1400,9 @@ func TestTempoDBBatchQueryRangeFallback(t *testing.T) {
 		for _, l := range ts.Labels {
 			if l.Key == "_meta_query_fragment" {
 				switch l.Value.GetStringValue() {
-				case `{ .service.name="even" } | count_over_time()`:
+				case "{ .service.name = `even` } | count_over_time()":
 					evenCount = ts.Samples[0].Value
-				case `{ } | count_over_time()`:
+				case "{ true } | count_over_time()":
 					totalCount = ts.Samples[0].Value
 				}
 			}

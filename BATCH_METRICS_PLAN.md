@@ -469,7 +469,7 @@ Delegates to both sides, merging conditions from all leaf queries.
 
 ## Out of scope
 
-- **Evaluation**: `Compile()` on a math expression returns nil `MetricsPipeline`. Callers must detect `MetricsMath != nil` and use the batch path.
+- **Evaluation**: ~~`Compile()` on a math expression returns nil `MetricsPipeline`. Callers must detect `MetricsMath != nil` and use the batch path.~~ Now handled by `CompileMetricsQueryRange` (see next section).
 - **`metricsSecondStage` on math expressions**: e.g., `({} | rate()) / ({} | count_over_time()) | topk(10)`
 - **`POW` and `MOD` operators**: only `+`, `-`, `*`, `/` for now.
 
@@ -482,3 +482,152 @@ Delegates to both sides, merging conditions from all leaf queries.
 - `pkg/traceql/ast_validate.go` -- `MetricsMathOp.validate()`, updated `RootExpr.validate()`
 - `pkg/traceql/ast_conditions.go` -- `MetricsMathOp.extractConditions()`, updated `RootExpr.extractConditions()`
 - `pkg/traceql/parse_test.go` -- `TestMetricsMath` test cases
+
+---
+
+# MetricsMath Support in CompileMetricsQueryRange (Level 1)
+
+## Background
+
+With the AST/parser supporting `MetricsMathOp` nodes and the batch fragment infrastructure in place, the next step is to make `CompileMetricsQueryRange` (the standard L1 entry point) transparently handle metrics math expressions like `({status=error} | count_over_time()) / ({} | count_over_time())`.
+
+Previously, `CompileMetricsQueryRange` called `Compile()` and rejected queries where `MetricsPipeline == nil`. For MetricsMath expressions, `Compile()` returns nil `MetricsPipeline` because the top-level `RootExpr` has `MetricsMath` set instead of `MetricsPipeline`. Callers had to explicitly use `CompileBatchMetricsQueryRange` with pre-split query strings.
+
+Now, `CompileMetricsQueryRange` detects `MetricsMath` on the parsed expression, extracts all leaf metrics queries from the math tree, and compiles them as batch fragments using the existing infrastructure. The output is fragment-labeled series (with `_meta_query_fragment` labels) ready for higher-level math aggregation.
+
+## Status
+
+All items implemented and tested.
+
+- [x] **collect-leaves**: Add `collectLeafMetrics()` to traverse MetricsMathOp tree and return leaf `*RootExpr` nodes
+- [x] **compile-helper**: Add `compileMetricsMathQueryRange()` private method that creates fragments from AST leaves
+- [x] **modify-compile**: Modify `CompileMetricsQueryRange` to detect `MetricsMath` and branch to helper
+- [x] **update-tests**: Update `TestTempoDBBatchQueryRange` and `TestTempoDBBatchQueryRangeFallback` to use `CompileMetricsQueryRange`
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph Input [Input]
+        Query["CompileMetricsQueryRange with query: '(A | rate()) / (B | count_over_time())'"]
+    end
+
+    subgraph Parse [Parse and Detect]
+        Compile["Compile(query) -> expr with MetricsMath"]
+        Detect["expr.MetricsMath != nil?"]
+    end
+
+    subgraph Extract [Extract Leaves]
+        Collect["collectLeafMetrics(expr)"]
+        Leaf1["Leaf 0: RootExpr with Pipeline=A, MetricsPipeline=rate()"]
+        Leaf2["Leaf 1: RootExpr with Pipeline=B, MetricsPipeline=count_over_time()"]
+    end
+
+    subgraph FragmentBuild [Build Fragments]
+        Frag1["Fragment 0: eval=A.Pipeline.evaluate, pipeline=rate(), storageReq from A"]
+        Frag2["Fragment 1: eval=B.Pipeline.evaluate, pipeline=count_over_time(), storageReq from B"]
+        Merge["mergeFragmentConditions -> merged FetchSpansRequest"]
+    end
+
+    subgraph Evaluator [MetricsEvaluator]
+        ME["MetricsEvaluator with fragments, merged storageReq"]
+        Do["Do() -> batch path: filter and observe per fragment"]
+        Results["Results() -> fragment-labeled series with _meta_query_fragment"]
+    end
+
+    Query --> Compile --> Detect
+    Detect -->|Yes| Collect
+    Detect -->|No| SinglePath["Existing single-query path"]
+    Collect --> Leaf1
+    Collect --> Leaf2
+    Leaf1 --> Frag1
+    Leaf2 --> Frag2
+    Frag1 --> Merge
+    Frag2 --> Merge
+    Merge --> ME --> Do --> Results
+```
+
+## Implementation
+
+### 1. collectLeafMetrics (`pkg/traceql/engine_metrics.go`)
+
+Recursively traverses the `MetricsMathOp` binary tree and collects all leaf `*RootExpr` nodes (those with `MetricsPipeline != nil`). Returns leaves in left-to-right order.
+
+```go
+func collectLeafMetrics(r *RootExpr) []*RootExpr {
+    if r.MetricsMath != nil {
+        return append(collectLeafMetrics(r.MetricsMath.LHS), collectLeafMetrics(r.MetricsMath.RHS)...)
+    }
+    if r.MetricsPipeline != nil {
+        return []*RootExpr{r}
+    }
+    return nil
+}
+```
+
+For `(A / B) + C`, this returns `[A, B, C]`.
+
+### 2. compileMetricsMathQueryRange (`pkg/traceql/engine_metrics.go`)
+
+Private method on `Engine` that takes a parsed `*RootExpr` with `MetricsMath` set and builds a `MetricsEvaluator` with fragments. This works from parsed AST leaf nodes instead of raw query strings (unlike `CompileBatchMetricsQueryRange`).
+
+For each leaf:
+- Creates a per-leaf `FetchSpansRequest` with `AllConditions: true` via `leaf.extractConditions()`
+- Uses `leaf.Pipeline.evaluate` as the fragment's `eval` function (filters spans)
+- Uses `leaf.MetricsPipeline` as the fragment's metrics pipeline (observes matching spans)
+- Uses `leaf.String()` as the fragment ID (canonical string representation)
+
+Conditions from all leaves are merged with OR logic via `mergeFragmentConditions()`. No `SecondPass` callback is set -- filtering happens in `Do()` via each fragment's `eval`, identical to the existing batch path.
+
+### 3. CompileMetricsQueryRange modification (`pkg/traceql/engine_metrics.go`)
+
+After `Compile(req.Query)` succeeds, a new branch checks `expr.MetricsMath != nil` and delegates to `compileMetricsMathQueryRange`. This is inserted before the existing `metricsPipeline == nil` check, so:
+
+- MetricsMath expressions use the batch fragment path
+- Regular metrics queries use the existing single-query path (unchanged)
+- Non-metrics queries still return "not a metrics query"
+
+### 4. Fragment ID format
+
+Fragment IDs use `leaf.String()` which produces a canonical representation:
+
+| Input query fragment             | `leaf.String()` output                       |
+|----------------------------------|----------------------------------------------|
+| `{ .service.name="even" } \| count_over_time()` | `{ .service.name = ` `` `even` `` ` } \| count_over_time()` |
+| `{ } \| count_over_time()`       | `{ true } \| count_over_time()`              |
+
+This differs from raw query strings (backtick quotes, spaces around `=`, `{}` becomes `{ true }`), but is deterministic and round-trip safe.
+
+## Files Modified
+
+| File | Changes |
+|------|---------|
+| `pkg/traceql/engine_metrics.go` | `collectLeafMetrics()`, `compileMetricsMathQueryRange()`, modified `CompileMetricsQueryRange()` |
+| `tempodb/tempodb_metrics_test.go` | Updated `TestTempoDBBatchQueryRange` and `TestTempoDBBatchQueryRangeFallback` to use `CompileMetricsQueryRange` with math expression queries |
+
+## Testing
+
+### TestTempoDBBatchQueryRange (updated)
+
+Tests now use `CompileMetricsQueryRange` with full math expression queries instead of `CompileBatchMetricsQueryRange` with separate query strings:
+
+- **basic_batch_query**: Query `({ .service.name="even" } | count_over_time()) / ({ } | count_over_time())`. Verifies 2 series with `_meta_query_fragment` labels, even=25, all=50.
+- **overlapping_matches**: Query with 3 leaves via `((even) + (odd)) + (all)`. Verifies even=25, odd=25, all=50, even+odd=total.
+- **validation_errors**: Non-metrics query returns "not a metrics query", invalid syntax returns compile error.
+
+### TestTempoDBBatchQueryRangeFallback (updated)
+
+Uses `CompileMetricsQueryRange` with math expression query against vparquet4 storage. Verifies correct results with fallback evaluation (vparquet4 has stub `MatchedGroups`).
+
+## Backward Compatibility
+
+- `CompileBatchMetricsQueryRange` remains available for callers that provide queries as separate strings
+- Existing `CompileMetricsQueryRange` single-query behavior is unchanged
+- `Do()`, `Results()`, `Length()` batch paths are reused without modification
+- No changes to protobuf, storage layer, or API contracts
+
+## Future Enhancements (Out of Scope)
+
+1. Apply math operations on fragment results at L2/L3 (frontend aggregation)
+2. Store `MetricsMathOp` tree in `MetricsEvaluator` for higher-level evaluation
+3. `metricsSecondStage` on math expressions (e.g., `({} | rate()) / ({} | count_over_time()) | topk(10)`)

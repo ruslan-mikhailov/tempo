@@ -993,6 +993,12 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, exempl
 		return nil, fmt.Errorf("compiling query: %w", err)
 	}
 
+	// MetricsMath expressions (e.g. "({...} | rate()) / ({} | count_over_time())")
+	// are compiled as batch fragments with merged conditions.
+	if expr.MetricsMath != nil {
+		return e.compileMetricsMathQueryRange(req, expr, exemplars, timeOverlapCutoff)
+	}
+
 	if metricsPipeline == nil {
 		return nil, fmt.Errorf("not a metrics query")
 	}
@@ -1115,6 +1121,77 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, exempl
 	}
 
 	optimize(storageReq)
+
+	return me, nil
+}
+
+// collectLeafMetrics traverses a MetricsMathOp tree and returns all leaf
+// RootExpr nodes (those with MetricsPipeline set) in left-to-right order.
+// For an expression like (A / B) + C, it returns [A, B, C].
+func collectLeafMetrics(r *RootExpr) []*RootExpr {
+	if r.MetricsMath != nil {
+		return append(collectLeafMetrics(r.MetricsMath.LHS), collectLeafMetrics(r.MetricsMath.RHS)...)
+	}
+	if r.MetricsPipeline != nil {
+		return []*RootExpr{r}
+	}
+	return nil
+}
+
+// compileMetricsMathQueryRange compiles a MetricsMath expression into a batch
+// MetricsEvaluator. It extracts leaf metrics queries from the math tree, creates
+// a fragment for each leaf, and merges their conditions for efficient storage access.
+//
+// This produces the same fragment-labeled output as CompileBatchMetricsQueryRange
+// but works from the parsed AST rather than separate query strings.
+func (e *Engine) compileMetricsMathQueryRange(
+	req *tempopb.QueryRangeRequest,
+	expr *RootExpr,
+	exemplars int,
+	timeOverlapCutoff float64,
+) (*MetricsEvaluator, error) {
+	leaves := collectLeafMetrics(expr)
+	if len(leaves) == 0 {
+		return nil, fmt.Errorf("no metrics queries found in expression")
+	}
+	if len(leaves) > maxBatchFragments {
+		return nil, fmt.Errorf("too many sub-queries: %d exceeds maximum %d", len(leaves), maxBatchFragments)
+	}
+
+	fragments := make([]QueryFragment, len(leaves))
+	for i, leaf := range leaves {
+		leafReq := &FetchSpansRequest{AllConditions: true}
+		leaf.extractConditions(leafReq)
+
+		leaf.MetricsPipeline.init(req, AggregateModeRaw)
+
+		fragments[i] = QueryFragment{
+			ID:         leaf.String(),
+			Index:      i,
+			eval:       leaf.Pipeline.evaluate,
+			pipeline:   leaf.MetricsPipeline,
+			storageReq: leafReq,
+		}
+	}
+
+	mergedReq := mergeFragmentConditions(fragments)
+
+	me := &MetricsEvaluator{
+		storageReq:        mergedReq,
+		fragments:         fragments,
+		timeOverlapCutoff: timeOverlapCutoff,
+		maxExemplars:      exemplars,
+		exemplarMap:       make(map[string]struct{}, exemplars),
+		start:             req.Start,
+		end:               req.End,
+		checkTime:         true,
+	}
+
+	// Add span start time for time filtering in Do()
+	if !mergedReq.HasAttribute(IntrinsicSpanStartTimeAttribute) {
+		mergedReq.SecondPassConditions = append(mergedReq.SecondPassConditions,
+			Condition{Attribute: IntrinsicSpanStartTimeAttribute})
+	}
 
 	return me, nil
 }
