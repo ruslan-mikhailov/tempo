@@ -1653,44 +1653,52 @@ func BenchmarkMetricsQueryRange(b *testing.B) {
 		}
 	}
 
-	b.Run("math", func(b *testing.B) {
-		req := newReq(`({span.http.status_code=200} | rate()) + ({span.http.status_code=500} | rate())`)
-
-		eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
-		require.NoError(b, err)
+	// runFullPipeline executes the full L1 → L2 → L3 pipeline for a single query.
+	runFullPipeline := func(b *testing.B, req *tempopb.QueryRangeRequest) {
+		b.Helper()
 
 		b.ResetTimer()
 		for b.Loop() {
-			err = eval.Do(ctx, f, st, end, 0)
+			// L1: raw span processing
+			evalL1, err := e.CompileMetricsQueryRange(req, 0, 0, false)
 			require.NoError(b, err)
-		}
-		b.StopTimer()
 
-		ss := eval.Results()
-		bytes, spansTotal, _ := eval.Metrics()
-		b.ReportMetric(float64(bytes), "bytes")
-		b.ReportMetric(float64(spansTotal), "spans")
-		b.ReportMetric(float64(len(ss)), "series")
+			err = evalL1.Do(ctx, f, st, end, 0)
+			require.NoError(b, err)
+
+			l1Series := evalL1.Results().ToProto(req)
+
+			// L2: sum mode (simulates combining from multiple queriers)
+			evalL2, err := e.CompileMetricsQueryRangeNonRaw(req, traceql.AggregateModeSum)
+			require.NoError(b, err)
+
+			evalL2.ObserveSeries(l1Series)
+			l2Series := evalL2.Results().ToProto(req)
+
+			// L3: final mode (applies math for MetricsMath, finalizes aggregates)
+			evalL3, err := e.CompileMetricsQueryRangeNonRaw(req, traceql.AggregateModeFinal)
+			require.NoError(b, err)
+
+			evalL3.ObserveSeries(l2Series)
+			_ = evalL3.Results()
+		}
+	}
+	b.Run("temp", func(b *testing.B) {
+		query := `{ } | count_over_time() by (resource.service.name)`
+		req := newReq(query)
+		runFullPipeline(b, req)
+	})
+
+	b.Run("math", func(b *testing.B) {
+		query := `({span.http.status_code=200} | rate()) + ({span.http.status_code=500} | rate())`
+		req := newReq(query)
+		runFullPipeline(b, req)
 	})
 
 	b.Run("regex", func(b *testing.B) {
-		req := newReq(`{span.http.status_code=~"200|500"} | rate()`)
-
-		eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
-		require.NoError(b, err)
-
-		b.ResetTimer()
-		for b.Loop() {
-			err = eval.Do(ctx, f, st, end, 0)
-			require.NoError(b, err)
-		}
-		b.StopTimer()
-
-		ss := eval.Results()
-		bytes, spansTotal, _ := eval.Metrics()
-		b.ReportMetric(float64(bytes), "bytes")
-		b.ReportMetric(float64(spansTotal), "spans")
-		b.ReportMetric(float64(len(ss)), "series")
+		query := `{span.http.status_code=~"200|500"} | rate()`
+		req := newReq(query)
+		runFullPipeline(b, req)
 	})
 
 	b.Run("concurrent_5", func(b *testing.B) {
@@ -1702,25 +1710,50 @@ func BenchmarkMetricsQueryRange(b *testing.B) {
 			`({span.http.status_code=200} | rate()) + ({span.http.status_code=500} | rate())`,
 		}
 
-		evals := make([]*traceql.MetricsEvaluator, len(queries))
+		reqs := make([]*tempopb.QueryRangeRequest, len(queries))
 		for i, q := range queries {
-			req := newReq(q)
-			eval, err := e.CompileMetricsQueryRange(req, 0, 0, false)
-			require.NoError(b, err)
-			evals[i] = eval
+			reqs[i] = newReq(q)
 		}
 
 		b.ResetTimer()
 		for b.Loop() {
 			var wg sync.WaitGroup
-			errs := make([]error, len(evals))
+			errs := make([]error, len(reqs))
 
-			for i, eval := range evals {
+			for i, req := range reqs {
 				wg.Add(1)
-				go func(idx int, ev *traceql.MetricsEvaluator) {
+				go func(idx int, r *tempopb.QueryRangeRequest) {
 					defer wg.Done()
-					errs[idx] = ev.Do(ctx, f, st, end, 0)
-				}(i, eval)
+
+					evalL1, err := e.CompileMetricsQueryRange(r, 0, 0, false)
+					if err != nil {
+						errs[idx] = err
+						return
+					}
+
+					if err = evalL1.Do(ctx, f, st, end, 0); err != nil {
+						errs[idx] = err
+						return
+					}
+
+					l1Series := evalL1.Results().ToProto(r)
+
+					evalL2, err := e.CompileMetricsQueryRangeNonRaw(r, traceql.AggregateModeSum)
+					if err != nil {
+						errs[idx] = err
+						return
+					}
+					evalL2.ObserveSeries(l1Series)
+					l2Series := evalL2.Results().ToProto(r)
+
+					evalL3, err := e.CompileMetricsQueryRangeNonRaw(r, traceql.AggregateModeFinal)
+					if err != nil {
+						errs[idx] = err
+						return
+					}
+					evalL3.ObserveSeries(l2Series)
+					_ = evalL3.Results()
+				}(i, req)
 			}
 
 			wg.Wait()
@@ -1729,12 +1762,5 @@ func BenchmarkMetricsQueryRange(b *testing.B) {
 				require.NoError(b, err, fmt.Sprintf("query %d failed: %s", i, queries[i]))
 			}
 		}
-		b.StopTimer()
-
-		var totalSeries int
-		for _, eval := range evals {
-			totalSeries += len(eval.Results())
-		}
-		b.ReportMetric(float64(totalSeries), "total_series")
 	})
 }
