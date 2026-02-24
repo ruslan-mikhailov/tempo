@@ -1,10 +1,20 @@
 package traceql
 
-func (r RootExpr) extractConditions(request *FetchSpansRequest) {
-	r.Pipeline.extractConditions(request)
-	if r.MetricsPipeline != nil {
-		r.MetricsPipeline.extractConditions(request)
+func (e Expr) extractConditions(request *FetchSpansRequest) {
+	if !e.IsLeaf() {
+		e.LHS.extractConditions(request)
+		e.RHS.extractConditions(request)
+		return
 	}
+
+	e.Leaf.Pipeline.extractConditions(request)
+	if e.Leaf.MetricsPipeline != nil {
+		e.Leaf.MetricsPipeline.extractConditions(request)
+	}
+}
+
+func (r RootExpr) extractConditions(request *FetchSpansRequest) {
+	r.Expr.extractConditions(request)
 }
 
 func (f SpansetFilter) extractConditions(request *FetchSpansRequest) {

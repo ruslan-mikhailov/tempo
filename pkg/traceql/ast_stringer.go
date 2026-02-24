@@ -7,22 +7,30 @@ import (
 	"unsafe"
 )
 
-func (r RootExpr) String() string {
+func (e Expr) String() string {
+	if !e.IsLeaf() {
+		return "(" + e.LHS.String() + ") " + e.Op.String() + " (" + e.RHS.String() + ")"
+	}
+
 	s := strings.Builder{}
-	s.WriteString(r.Pipeline.String())
-	if r.MetricsPipeline != nil {
+	s.WriteString(e.Leaf.Pipeline.String())
+	if e.Leaf.MetricsPipeline != nil {
 		s.WriteString(" | ")
-		s.WriteString(r.MetricsPipeline.String())
+		s.WriteString(e.Leaf.MetricsPipeline.String())
 	}
-	if r.MetricsSecondStage != nil {
+	if e.Leaf.MetricsSecondStage != nil {
 		s.WriteString(" | ")
-		s.WriteString(r.MetricsSecondStage.String())
-	}
-	if r.Hints != nil {
-		s.WriteString(" ")
-		s.WriteString(r.Hints.String())
+		s.WriteString(e.Leaf.MetricsSecondStage.String())
 	}
 	return s.String()
+}
+
+func (r RootExpr) String() string {
+	s := r.Expr.String()
+	if r.Hints != nil {
+		s += " " + r.Hints.String()
+	}
+	return s
 }
 
 func (p Pipeline) String() string {
