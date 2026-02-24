@@ -76,14 +76,14 @@ func ParseIdentifier(s string) (Attribute, error) {
 		return Attribute{}, fmt.Errorf("failed to parse identifier %s: parsed expression is nil", s)
 	}
 
-	if len(expr.Pipeline.Elements) == 0 {
+	if len(expr.Expr.Leaf.Pipeline.Elements) == 0 {
 		return Attribute{}, fmt.Errorf("failed to parse identifier %s: no pipeline elements found", s)
 	}
 
 	// Extract and validate the spanset filter
-	filter, ok := expr.Pipeline.Elements[0].(*SpansetFilter)
+	filter, ok := expr.Expr.Leaf.Pipeline.Elements[0].(*SpansetFilter)
 	if !ok {
-		return Attribute{}, fmt.Errorf("failed to parse identifier %s: expected SpansetFilter but got %T", s, expr.Pipeline.Elements[0])
+		return Attribute{}, fmt.Errorf("failed to parse identifier %s: expected SpansetFilter but got %T", s, expr.Expr.Leaf.Pipeline.Elements[0])
 	}
 
 	// Extract and validate the attribute
