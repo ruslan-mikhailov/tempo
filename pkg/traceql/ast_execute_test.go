@@ -35,7 +35,7 @@ func testEvaluator(t *testing.T, tc evalTC) {
 				cloneIn[i].Spans = append([]Span(nil), tc.input[i].Spans...)
 			}
 
-			actual, err := ast.Pipeline.evaluate(tc.input)
+			actual, err := ast.Expr.Leaf.Pipeline.evaluate(tc.input)
 			require.NoError(t, err)
 
 			// sort expected/actual spansets. grouping requires this b/c map iteration makes the output
@@ -1259,7 +1259,7 @@ func TestSpansetOperationEvaluateArrayUnsupported(t *testing.T) {
 				cloneIn[i].Spans = append([]Span(nil), tc.input[i].Spans...)
 			}
 
-			_, err = ast.Pipeline.evaluate(tc.input)
+			_, err = ast.Expr.Leaf.Pipeline.evaluate(tc.input)
 			require.Error(t, err, errors.ErrUnsupported)
 		})
 	}
@@ -2213,7 +2213,7 @@ func TestNotParentWithEmptyLHS(t *testing.T) {
 	ast, err := Parse(query)
 	require.NoError(t, err)
 
-	out, err := ast.Pipeline.evaluate(ss)
+	out, err := ast.Expr.Leaf.Pipeline.evaluate(ss)
 	require.NoError(t, err)
 
 	// Expect the RHS span to be returned because no LHS parent exists (negated parent)

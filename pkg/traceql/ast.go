@@ -30,12 +30,32 @@ type typedExpression interface {
 	impliedType() StaticType
 }
 
+// RootExpr is the top-level AST node. A leaf node (Op == OpNone) embeds a
+// single Expr. A math node (Op != OpNone) combines two sub-trees via a
+// binary arithmetic operator (+, -, *, /).
 type RootExpr struct {
+	Hints             *Hints
+	OptimizationCount int
+	Expr              Expr
+}
+
+type Expr struct {
+	Leaf *ExprLeaf
+	Op   Operator
+	LHS  *Expr
+	RHS  *Expr
+}
+
+// ExprLeaf holds the data for a single TraceQL query: its pipeline, optional
+// metrics stages, hints, and optimisation metadata.
+type ExprLeaf struct {
 	Pipeline           Pipeline
 	MetricsPipeline    firstStageElement
 	MetricsSecondStage secondStageElement
-	Hints              *Hints
-	OptimizationCount  int
+}
+
+func (e *Expr) IsLeaf() bool {
+	return e.Leaf != nil
 }
 
 func NeedsFullTrace(e ...Element) bool {
@@ -64,13 +84,20 @@ func NeedsFullTrace(e ...Element) bool {
 	return false
 }
 
-func (r *RootExpr) NeedsFullTrace() bool {
-	for _, e := range r.Pipeline.Elements {
-		if NeedsFullTrace(e) {
+func (e *Expr) NeedsFullTrace() bool {
+	if !e.IsLeaf() {
+		return e.LHS.NeedsFullTrace() || e.RHS.NeedsFullTrace()
+	}
+	for _, el := range e.Leaf.Pipeline.Elements {
+		if NeedsFullTrace(el) {
 			return true
 		}
 	}
 	return false
+}
+
+func (r *RootExpr) NeedsFullTrace() bool {
+	return r.Expr.NeedsFullTrace()
 }
 
 func newRootExpr(e PipelineElement) *RootExpr {
@@ -80,7 +107,7 @@ func newRootExpr(e PipelineElement) *RootExpr {
 	}
 
 	return &RootExpr{
-		Pipeline: p,
+		Expr: Expr{Leaf: &ExprLeaf{Pipeline: p}},
 	}
 }
 
@@ -91,8 +118,10 @@ func newRootExprWithMetrics(e PipelineElement, m firstStageElement) *RootExpr {
 	}
 
 	return &RootExpr{
-		Pipeline:        p,
-		MetricsPipeline: m,
+		Expr: Expr{Leaf: &ExprLeaf{
+			Pipeline:        p,
+			MetricsPipeline: m,
+		}},
 	}
 }
 
@@ -103,9 +132,21 @@ func newRootExprWithMetricsTwoStage(e PipelineElement, m1 firstStageElement, m2 
 	}
 
 	return &RootExpr{
-		Pipeline:           p,
-		MetricsPipeline:    m1,
-		MetricsSecondStage: m2,
+		Expr: Expr{Leaf: &ExprLeaf{
+			Pipeline:           p,
+			MetricsPipeline:    m1,
+			MetricsSecondStage: m2,
+		}},
+	}
+}
+
+func newRootExprMath(op Operator, lhs, rhs *RootExpr) *RootExpr {
+	return &RootExpr{
+		Expr: Expr{
+			Op:  op,
+			LHS: &lhs.Expr,
+			RHS: &rhs.Expr,
+		},
 	}
 }
 
@@ -116,7 +157,11 @@ func (r *RootExpr) withHints(h *Hints) *RootExpr {
 
 // IsNoop detects trivial noop queries like {false} which never return
 // results and can be used to exit early.
-func (r *RootExpr) IsNoop() bool {
+func (e *Expr) IsNoop() bool {
+	if !e.IsLeaf() {
+		return e.LHS.IsNoop() && e.RHS.IsNoop()
+	}
+
 	isNoopFilter := func(x any) bool {
 		f, ok := x.(*SpansetFilter)
 		if !ok {
@@ -135,8 +180,8 @@ func (r *RootExpr) IsNoop() bool {
 	// Any spanset filter that references the span or something other
 	// than static false means the expression isn't noop.
 	// This checks one layer deep which covers most expressions.
-	for _, e := range r.Pipeline.Elements {
-		switch x := e.(type) {
+	for _, el := range e.Leaf.Pipeline.Elements {
+		switch x := el.(type) {
 		case SpansetOperation:
 			if !isNoopFilter(x.LHS) {
 				return false
@@ -155,6 +200,10 @@ func (r *RootExpr) IsNoop() bool {
 		}
 	}
 	return true
+}
+
+func (r *RootExpr) IsNoop() bool {
+	return r.Expr.IsNoop()
 }
 
 // **********************
