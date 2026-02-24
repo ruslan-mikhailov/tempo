@@ -11,6 +11,7 @@ import (
 
 %union {
     root RootExpr
+    metricsExpression *RootExpr
     groupOperation GroupOperation
     coalesceOperation CoalesceOperation
     selectOperation SelectOperation
@@ -71,6 +72,7 @@ import (
 %type <metricsSecondStagePipeline> metricsSecondStagePipeline
 %type <scalarFilterOperation> metricsFilterOperation
 %type <metricsSecondStage> metricsFilter
+%type <metricsExpression> metricsExpression wrappedMetricsPipeline
 
 %type <scalarPipelineExpressionFilter> scalarPipelineExpressionFilter
 %type <scalarPipelineExpression> scalarPipelineExpression
@@ -128,9 +130,10 @@ import (
 root:
     spansetPipeline                                                       { yylex.(*lexer).expr = newRootExpr($1) }
   | spansetPipelineExpression                                             { yylex.(*lexer).expr = newRootExpr($1) }
-  | scalarPipelineExpressionFilter                                        { yylex.(*lexer).expr = newRootExpr($1) } 
+  | scalarPipelineExpressionFilter                                        { yylex.(*lexer).expr = newRootExpr($1) }
   | spansetPipeline PIPE metricsAggregation                               { yylex.(*lexer).expr = newRootExprWithMetrics($1, $3) }
   | spansetPipeline PIPE metricsAggregation metricsSecondStagePipeline    { yylex.(*lexer).expr = newRootExprWithMetricsTwoStage($1, $3, $4) }
+  | metricsExpression                                                     { yylex.(*lexer).expr = $1 }
   | root hints                                                            { yylex.(*lexer).expr.withHints($2) }
   ;
 
@@ -363,6 +366,29 @@ metricsSecondStagePipeline:
   | metricsFilter                                        { $$.Append($1, " ") }
   | metricsSecondStagePipeline PIPE metricsSecondStage   { $$ = $1; $$.Append($3, " | ") }
   | metricsSecondStagePipeline metricsFilter             { $$ = $1; $$.Append($2, " ") }
+  ;
+
+// **********************
+// Metrics Math Expressions
+// Combines parenthesized metrics pipelines with arithmetic operators.
+// Example: ({status=error} | count_over_time()) / ({} | count_over_time())
+// **********************
+metricsExpression:
+    OPEN_PARENS metricsExpression CLOSE_PARENS               { $$ = $2 }
+  | metricsExpression ADD metricsExpression                   { $$ = newRootExprMath(OpAdd, $1, $3) }
+  | metricsExpression SUB metricsExpression                   { $$ = newRootExprMath(OpSub, $1, $3) }
+  | metricsExpression MUL metricsExpression                   { $$ = newRootExprMath(OpMult, $1, $3) }
+  | metricsExpression DIV metricsExpression                   { $$ = newRootExprMath(OpDiv, $1, $3) }
+  | metricsExpression MOD metricsExpression                   { $$ = newRootExprMath(OpMod, $1, $3) }
+  | metricsExpression POW metricsExpression                   { $$ = newRootExprMath(OpPower, $1, $3) }
+  | wrappedMetricsPipeline                                    { $$ = $1 }
+  ;
+
+wrappedMetricsPipeline:
+    OPEN_PARENS spansetPipeline PIPE metricsAggregation CLOSE_PARENS
+      { $$ = newRootExprWithMetrics($2, $4) }
+  | OPEN_PARENS spansetPipeline PIPE metricsAggregation metricsSecondStagePipeline CLOSE_PARENS
+      { $$ = newRootExprWithMetricsTwoStage($2, $4, $5) }
   ;
 
 // **********************
