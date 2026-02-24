@@ -94,7 +94,8 @@ func (s *MCPServer) handleSearch(ctx context.Context, request mcp.CallToolReques
 		return mcp.NewToolResultError(fmt.Sprintf("query parse error. Consult TraceQL docs tools: %v", err)), nil
 	}
 
-	if parsed.MetricsPipeline != nil || parsed.MetricsSecondStage != nil {
+	// if has sub-queries or has metrics pipelines, not a valid query
+	if parsed != nil && (!parsed.Expr.IsLeaf() || parsed.Expr.Leaf.MetricsPipeline != nil || parsed.Expr.Leaf.MetricsSecondStage != nil) {
 		return mcp.NewToolResultError("TraceQL metrics query received on traceql-search tool. Use the traceql-metrics-instant or traceql-metrics-range tool instead"), nil
 	}
 
@@ -158,7 +159,7 @@ func (s *MCPServer) handleInstantQuery(ctx context.Context, request mcp.CallTool
 		return mcp.NewToolResultError(fmt.Sprintf("query parse error. Consult TraceQL docs tools: %v", err)), nil
 	}
 
-	if parsed.MetricsPipeline == nil {
+	if parsed.Expr.IsLeaf() && parsed.Expr.Leaf.MetricsPipeline == nil {
 		return mcp.NewToolResultError("TraceQL search query received on instant query tool. Use the traceql-search tool instead"), nil
 	}
 
@@ -218,7 +219,7 @@ func (s *MCPServer) handleRangeQuery(ctx context.Context, request mcp.CallToolRe
 		return mcp.NewToolResultError(fmt.Sprintf("query parse error. Consult TraceQL docs tools: %v", err)), nil
 	}
 
-	if parsed.MetricsPipeline == nil {
+	if parsed.Expr.IsLeaf() && parsed.Expr.Leaf.MetricsPipeline == nil {
 		return mcp.NewToolResultError("TraceQL search query received on range query tool. Use the traceql-search tool instead"), nil
 	}
 
