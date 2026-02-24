@@ -31,6 +31,12 @@ type typedExpression interface {
 }
 
 type RootExpr struct {
+	Op  Operator // OpAdd, OpSub, OpMult, OpDiv, OpNone
+	LHS *RootExpr
+	RHS *RootExpr
+}
+
+type Expr struct {
 	Pipeline           Pipeline
 	MetricsPipeline    firstStageElement
 	MetricsSecondStage secondStageElement
