@@ -43,7 +43,7 @@ func Compile(query string) (*RootExpr, SpansetFilterFunc, firstStageElement, sec
 		return nil, nil, nil, nil, nil, err
 	}
 
-	return expr, expr.Pipeline.evaluate, expr.MetricsPipeline, expr.MetricsSecondStage, req, nil
+	return expr, expr.Expr.Leaf.Pipeline.evaluate, expr.Expr.Leaf.MetricsPipeline, expr.Expr.Leaf.MetricsSecondStage, req, nil
 }
 
 func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchRequest, spanSetFetcher SpansetFetcher, allowUnsafeQueryHints bool) (*tempopb.SearchResponse, error) {
@@ -85,7 +85,7 @@ func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchReq
 	fetchSpansRequest.StartTimeUnixNanos = unixSecToNano(searchReq.Start)
 	fetchSpansRequest.EndTimeUnixNanos = unixSecToNano(searchReq.End)
 
-	span.SetAttributes(attribute.String("pipeline", rootExpr.Pipeline.String()))
+	span.SetAttributes(attribute.String("pipeline", rootExpr.Expr.Leaf.Pipeline.String()))
 	span.SetAttributes(attribute.String("fetchSpansRequest", fmt.Sprint(fetchSpansRequest)))
 
 	// calculate search meta conditions.
@@ -99,7 +99,7 @@ func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchReq
 			return nil, nil
 		}
 
-		evalSS, err := rootExpr.Pipeline.evaluate([]*Spanset{inSS})
+		evalSS, err := rootExpr.Expr.Leaf.Pipeline.evaluate([]*Spanset{inSS})
 		if err != nil {
 			span.RecordError(err, trace.WithAttributes(attribute.String("msg", "pipeline.evaluate")))
 			return nil, err
@@ -206,9 +206,9 @@ func (e *Engine) ExecuteTagValues(
 		}
 	}
 
-	autocompleteReq := e.createAutocompleteRequest(tag, rootExpr.Pipeline)
+	autocompleteReq := e.createAutocompleteRequest(tag, rootExpr.Expr.Leaf.Pipeline)
 
-	span.SetAttributes(attribute.String("pipeline", rootExpr.Pipeline.String()))
+	span.SetAttributes(attribute.String("pipeline", rootExpr.Expr.Leaf.Pipeline.String()))
 	span.SetAttributes(attribute.String("autocompleteReq", fmt.Sprint(autocompleteReq)))
 
 	// If the tag we are fetching is already filtered in the query, then this is a noop.
@@ -252,7 +252,7 @@ func (e *Engine) ExecuteTagNames(
 
 		// Query parses and is valid.
 		req := &FetchSpansRequest{}
-		rootExpr.Pipeline.extractConditions(req)
+		rootExpr.Expr.Leaf.Pipeline.extractConditions(req)
 		conditions = req.Conditions
 	}
 
@@ -262,7 +262,7 @@ func (e *Engine) ExecuteTagNames(
 	}
 
 	if rootExpr != nil {
-		span.SetAttributes(attribute.String("pipeline", rootExpr.Pipeline.String()))
+		span.SetAttributes(attribute.String("pipeline", rootExpr.Expr.Leaf.Pipeline.String()))
 	}
 	span.SetAttributes(attribute.String("autocompleteReq", fmt.Sprint(autocompleteReq)))
 
