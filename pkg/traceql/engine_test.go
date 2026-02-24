@@ -384,7 +384,7 @@ func (m *MockAutocompleteFetcher) Fetch(ctx context.Context, req FetchTagValuesR
 			continue
 		}
 
-		evalSS, _ := rootExpr.Pipeline.evaluate([]*Spanset{spanset})
+		evalSS, _ := rootExpr.Leaf.Pipeline.evaluate([]*Spanset{spanset})
 
 		for _, ss := range evalSS {
 			for _, s := range ss.Spans {

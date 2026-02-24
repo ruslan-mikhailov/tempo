@@ -376,7 +376,7 @@ func (s *queryRangeSharder) maxDuration(tenantID string) time.Duration {
 
 func (s *queryRangeSharder) jobSize(expr *traceql.RootExpr, allowUnsafe bool) int {
 	// If we have a query hint then use it
-	if v, ok := expr.Hints.GetInt(traceql.HintJobSize, allowUnsafe); ok && v > 0 {
+	if v, ok := expr.Leaf.Hints.GetInt(traceql.HintJobSize, allowUnsafe); ok && v > 0 {
 		return v
 	}
 

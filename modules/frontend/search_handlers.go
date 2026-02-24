@@ -151,7 +151,7 @@ func newCombiner(req *tempopb.SearchRequest, cfg SearchSharderConfig, marshaling
 		}
 
 		ok := false
-		if mostRecent, ok = query.Hints.GetBool(traceql.HintMostRecent, false); !ok {
+		if mostRecent, ok = query.Leaf.Hints.GetBool(traceql.HintMostRecent, false); !ok {
 			mostRecent = false
 		}
 	}

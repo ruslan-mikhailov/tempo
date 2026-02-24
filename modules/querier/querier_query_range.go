@@ -89,7 +89,7 @@ func (q *Querier) queryBlock(ctx context.Context, req *tempopb.QueryRangeRequest
 	}
 
 	timeOverlapCutoff := q.cfg.Metrics.TimeOverlapCutoff
-	if v, ok := expr.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
+	if v, ok := expr.Leaf.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
 		timeOverlapCutoff = v
 	}
 

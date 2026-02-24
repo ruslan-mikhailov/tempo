@@ -999,30 +999,30 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 	// the exemplars hint supports both bool and int. first we test for the integer value. if
 	// its not present then we look to see if the user provided `with(exemplars=false)`
 	exemplars := int(req.Exemplars)
-	if v, ok := expr.Hints.GetInt(HintExemplars, allowUnsafeQueryHints); ok {
+	if v, ok := expr.Leaf.Hints.GetInt(HintExemplars, allowUnsafeQueryHints); ok {
 		exemplars = v
-	} else if v, ok := expr.Hints.GetBool(HintExemplars, allowUnsafeQueryHints); ok {
+	} else if v, ok := expr.Leaf.Hints.GetBool(HintExemplars, allowUnsafeQueryHints); ok {
 		if !v {
 			exemplars = 0
 		}
 	}
 
 	// Debug sampling hints, remove once we settle on approach.
-	if traceSample, traceSampleOk := expr.Hints.GetFloat(HintTraceSample, allowUnsafeQueryHints); traceSampleOk {
+	if traceSample, traceSampleOk := expr.Leaf.Hints.GetFloat(HintTraceSample, allowUnsafeQueryHints); traceSampleOk {
 		storageReq.TraceSampler = newProbablisticSampler(traceSample)
 	}
-	if spanSample, spanSampleOk := expr.Hints.GetFloat(HintSpanSample, allowUnsafeQueryHints); spanSampleOk {
+	if spanSample, spanSampleOk := expr.Leaf.Hints.GetFloat(HintSpanSample, allowUnsafeQueryHints); spanSampleOk {
 		storageReq.SpanSampler = newProbablisticSampler(spanSample)
 	}
 
-	if sample, sampleOk := expr.Hints.GetBool(HintSample, allowUnsafeQueryHints); sampleOk && sample {
+	if sample, sampleOk := expr.Leaf.Hints.GetBool(HintSample, allowUnsafeQueryHints); sampleOk && sample {
 		// Automatic sampling
 		// Get other params
 		s := newAdaptiveSampler()
-		if debug, ok := expr.Hints.GetBool(HintDebug, allowUnsafeQueryHints); ok {
+		if debug, ok := expr.Leaf.Hints.GetBool(HintDebug, allowUnsafeQueryHints); ok {
 			s.debug = debug
 		}
-		if info, ok := expr.Hints.GetBool(HintInfo, allowUnsafeQueryHints); ok {
+		if info, ok := expr.Leaf.Hints.GetBool(HintInfo, allowUnsafeQueryHints); ok {
 			s.info = info
 		}
 
@@ -1034,7 +1034,7 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		}
 	}
 
-	if sampleFraction, ok := expr.Hints.GetFloat(HintSample, allowUnsafeQueryHints); ok && sampleFraction > 0 && sampleFraction < 1 {
+	if sampleFraction, ok := expr.Leaf.Hints.GetFloat(HintSample, allowUnsafeQueryHints); ok && sampleFraction > 0 && sampleFraction < 1 {
 		// Fixed sampling rate.
 		s := newProbablisticSampler(sampleFraction)
 

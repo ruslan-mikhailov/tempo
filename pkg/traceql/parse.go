@@ -52,10 +52,10 @@ func ParseWithOptimizationOption(s string, astOptimization bool) (expr *RootExpr
 		return nil, fmt.Errorf("unknown parse error: %d", e)
 	}
 
-	hintSkipOptimization, _ := l.expr.Hints.GetBool(HintSkipOptimization, true)
+	hintSkipOptimization, _ := l.expr.Leaf.Hints.GetBool(HintSkipOptimization, true)
 	if astOptimization && !hintSkipOptimization {
 		l.expr = ApplyDefaultASTRewrites(l.expr)
-		level.Debug(log.Logger).Log("msg", "optimize AST for TraceQL query", "query", s, "optimizedQuery", l.expr.String(), "optimizationCount", l.expr.OptimizationCount)
+		level.Debug(log.Logger).Log("msg", "optimize AST for TraceQL query", "query", s, "optimizedQuery", l.expr.String(), "optimizationCount", l.expr.Leaf.OptimizationCount)
 	}
 
 	return l.expr, nil
@@ -76,14 +76,14 @@ func ParseIdentifier(s string) (Attribute, error) {
 		return Attribute{}, fmt.Errorf("failed to parse identifier %s: parsed expression is nil", s)
 	}
 
-	if len(expr.Pipeline.Elements) == 0 {
+	if len(expr.Leaf.Pipeline.Elements) == 0 {
 		return Attribute{}, fmt.Errorf("failed to parse identifier %s: no pipeline elements found", s)
 	}
 
 	// Extract and validate the spanset filter
-	filter, ok := expr.Pipeline.Elements[0].(*SpansetFilter)
+	filter, ok := expr.Leaf.Pipeline.Elements[0].(*SpansetFilter)
 	if !ok {
-		return Attribute{}, fmt.Errorf("failed to parse identifier %s: expected SpansetFilter but got %T", s, expr.Pipeline.Elements[0])
+		return Attribute{}, fmt.Errorf("failed to parse identifier %s: expected SpansetFilter but got %T", s, expr.Leaf.Pipeline.Elements[0])
 	}
 
 	// Extract and validate the attribute

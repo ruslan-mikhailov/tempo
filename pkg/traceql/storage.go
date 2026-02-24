@@ -305,7 +305,7 @@ func ExtractFetchSpansRequest(query string) (FetchSpansRequest, error) {
 		AllConditions: true,
 	}
 
-	ast.Pipeline.extractConditions(&req)
+	ast.Leaf.Pipeline.extractConditions(&req)
 	return req, nil
 }
 

@@ -45,12 +45,12 @@ func (p *Processor) QueryRange(ctx context.Context, req tempopb.QueryRangeReques
 	unsafe := p.overrides.UnsafeQueryHints(p.tenant)
 
 	timeOverlapCutoff := p.Cfg.Metrics.TimeOverlapCutoff
-	if v, ok := expr.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
+	if v, ok := expr.Leaf.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
 		timeOverlapCutoff = v
 	}
 
 	concurrency := p.Cfg.Metrics.ConcurrentBlocks
-	if v, ok := expr.Hints.GetInt(traceql.HintConcurrentBlocks, unsafe); ok && v > 0 && v < 100 {
+	if v, ok := expr.Leaf.Hints.GetInt(traceql.HintConcurrentBlocks, unsafe); ok && v > 0 && v < 100 {
 		concurrency = uint(v)
 	}
 

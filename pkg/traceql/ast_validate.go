@@ -29,20 +29,20 @@ func (r RootExpr) validate() error {
 		return r.RHS.validate()
 	}
 
-	err := r.Pipeline.validate()
+	err := r.Leaf.Pipeline.validate()
 	if err != nil {
 		return err
 	}
 
-	if r.MetricsPipeline != nil {
-		err := r.MetricsPipeline.validate()
+	if r.Leaf.MetricsPipeline != nil {
+		err := r.Leaf.MetricsPipeline.validate()
 		if err != nil {
 			return err
 		}
 	}
 
-	if r.MetricsSecondStage != nil {
-		err := r.MetricsSecondStage.validate()
+	if r.Leaf.MetricsSecondStage != nil {
+		err := r.Leaf.MetricsSecondStage.validate()
 		if err != nil {
 			return err
 		}
@@ -50,8 +50,8 @@ func (r RootExpr) validate() error {
 
 	// extra validation to disallow compare() with second stage functions
 	// for example: `{} | compare({status=error}) | topk(10)` doesn't make sense
-	if r.MetricsPipeline != nil && r.MetricsSecondStage != nil {
-		if _, ok := r.MetricsPipeline.(*MetricsCompare); ok {
+	if r.Leaf.MetricsPipeline != nil && r.Leaf.MetricsSecondStage != nil {
+		if _, ok := r.Leaf.MetricsPipeline.(*MetricsCompare); ok {
 			return fmt.Errorf("`compare()` cannot be used with second stage functions")
 		}
 	}

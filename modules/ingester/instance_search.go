@@ -51,7 +51,7 @@ func (i *instance) Search(ctx context.Context, req *tempopb.SearchRequest) (*tem
 		}
 
 		ok := false
-		if mostRecent, ok = rootExpr.Hints.GetBool(traceql.HintMostRecent, false); !ok {
+		if mostRecent, ok = rootExpr.Leaf.Hints.GetBool(traceql.HintMostRecent, false); !ok {
 			mostRecent = false
 		}
 	}

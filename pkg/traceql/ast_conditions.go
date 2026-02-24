@@ -7,9 +7,9 @@ func (r RootExpr) extractConditions(request *FetchSpansRequest) {
 		return
 	}
 
-	r.Pipeline.extractConditions(request)
-	if r.MetricsPipeline != nil {
-		r.MetricsPipeline.extractConditions(request)
+	r.Leaf.Pipeline.extractConditions(request)
+	if r.Leaf.MetricsPipeline != nil {
+		r.Leaf.MetricsPipeline.extractConditions(request)
 	}
 }
 

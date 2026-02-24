@@ -180,7 +180,7 @@ func TestBinaryOpToArrayOpRewriter(t *testing.T) {
 
 			rewrite := rewriter.RewriteRoot(expr)
 			require.Equal(t, tc.want, rewrite.String())
-			require.Equal(t, tc.optCount, rewrite.OptimizationCount)
+			require.Equal(t, tc.optCount, rewrite.Leaf.OptimizationCount)
 		})
 	}
 }

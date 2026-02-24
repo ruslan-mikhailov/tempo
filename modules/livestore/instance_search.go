@@ -183,7 +183,7 @@ func (i *instance) Search(ctx context.Context, req *tempopb.SearchRequest) (*tem
 		}
 
 		ok := false
-		if mostRecent, ok = rootExpr.Hints.GetBool(traceql.HintMostRecent, false); !ok {
+		if mostRecent, ok = rootExpr.Leaf.Hints.GetBool(traceql.HintMostRecent, false); !ok {
 			mostRecent = false
 		}
 	}
@@ -677,7 +677,7 @@ func (i *instance) QueryRange(ctx context.Context, req *tempopb.QueryRangeReques
 	unsafe := i.overrides.UnsafeQueryHints(i.tenantID)
 
 	timeOverlapCutoff := i.Cfg.Metrics.TimeOverlapCutoff
-	if v, ok := expr.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
+	if v, ok := expr.Leaf.Hints.GetFloat(traceql.HintTimeOverlapCutoff, unsafe); ok && v >= 0 && v <= 1.0 {
 		timeOverlapCutoff = v
 	}
 

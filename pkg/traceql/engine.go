@@ -43,7 +43,7 @@ func Compile(query string) (*RootExpr, SpansetFilterFunc, firstStageElement, sec
 		return nil, nil, nil, nil, nil, err
 	}
 
-	return expr, expr.Pipeline.evaluate, expr.MetricsPipeline, expr.MetricsSecondStage, req, nil
+	return expr, expr.Leaf.Pipeline.evaluate, expr.Leaf.MetricsPipeline, expr.Leaf.MetricsSecondStage, req, nil
 }
 
 func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchRequest, spanSetFetcher SpansetFetcher, allowUnsafeQueryHints bool) (*tempopb.SearchResponse, error) {
@@ -56,22 +56,22 @@ func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchReq
 	}
 
 	// Check for performance testing hints
-	if returnIn, ok := rootExpr.Hints.GetDuration(HintDebugReturnIn, allowUnsafeQueryHints); ok {
+	if returnIn, ok := rootExpr.Leaf.Hints.GetDuration(HintDebugReturnIn, allowUnsafeQueryHints); ok {
 		var stdDev time.Duration
-		if stdDevDuration, ok := rootExpr.Hints.GetDuration(HintDebugStdDev, allowUnsafeQueryHints); ok {
+		if stdDevDuration, ok := rootExpr.Leaf.Hints.GetDuration(HintDebugStdDev, allowUnsafeQueryHints); ok {
 			stdDev = stdDevDuration
 		}
 		simulateLatency(returnIn, stdDev)
 
 		var probability float64
-		if p, ok := rootExpr.Hints.GetFloat(HintDebugDataFactor, allowUnsafeQueryHints); ok {
+		if p, ok := rootExpr.Leaf.Hints.GetFloat(HintDebugDataFactor, allowUnsafeQueryHints); ok {
 			probability = p
 		}
 		return generateFakeSearchResponse(probability), nil
 	}
 
 	var mostRecent, ok bool
-	if mostRecent, ok = rootExpr.Hints.GetBool(HintMostRecent, allowUnsafeQueryHints); !ok {
+	if mostRecent, ok = rootExpr.Leaf.Hints.GetBool(HintMostRecent, allowUnsafeQueryHints); !ok {
 		mostRecent = false
 	}
 
@@ -85,7 +85,7 @@ func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchReq
 	fetchSpansRequest.StartTimeUnixNanos = unixSecToNano(searchReq.Start)
 	fetchSpansRequest.EndTimeUnixNanos = unixSecToNano(searchReq.End)
 
-	span.SetAttributes(attribute.String("pipeline", rootExpr.Pipeline.String()))
+	span.SetAttributes(attribute.String("pipeline", rootExpr.Leaf.Pipeline.String()))
 	span.SetAttributes(attribute.String("fetchSpansRequest", fmt.Sprint(fetchSpansRequest)))
 
 	// calculate search meta conditions.
@@ -99,7 +99,7 @@ func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchReq
 			return nil, nil
 		}
 
-		evalSS, err := rootExpr.Pipeline.evaluate([]*Spanset{inSS})
+		evalSS, err := rootExpr.Leaf.Pipeline.evaluate([]*Spanset{inSS})
 		if err != nil {
 			span.RecordError(err, trace.WithAttributes(attribute.String("msg", "pipeline.evaluate")))
 			return nil, err
@@ -206,9 +206,9 @@ func (e *Engine) ExecuteTagValues(
 		}
 	}
 
-	autocompleteReq := e.createAutocompleteRequest(tag, rootExpr.Pipeline)
+	autocompleteReq := e.createAutocompleteRequest(tag, rootExpr.Leaf.Pipeline)
 
-	span.SetAttributes(attribute.String("pipeline", rootExpr.Pipeline.String()))
+	span.SetAttributes(attribute.String("pipeline", rootExpr.Leaf.Pipeline.String()))
 	span.SetAttributes(attribute.String("autocompleteReq", fmt.Sprint(autocompleteReq)))
 
 	// If the tag we are fetching is already filtered in the query, then this is a noop.
@@ -252,7 +252,7 @@ func (e *Engine) ExecuteTagNames(
 
 		// Query parses and is valid.
 		req := &FetchSpansRequest{}
-		rootExpr.Pipeline.extractConditions(req)
+		rootExpr.Leaf.Pipeline.extractConditions(req)
 		conditions = req.Conditions
 	}
 
@@ -262,7 +262,7 @@ func (e *Engine) ExecuteTagNames(
 	}
 
 	if rootExpr != nil {
-		span.SetAttributes(attribute.String("pipeline", rootExpr.Pipeline.String()))
+		span.SetAttributes(attribute.String("pipeline", rootExpr.Leaf.Pipeline.String()))
 	}
 	span.SetAttributes(attribute.String("autocompleteReq", fmt.Sprint(autocompleteReq)))
 

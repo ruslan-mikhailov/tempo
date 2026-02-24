@@ -13,18 +13,18 @@ func (r RootExpr) String() string {
 	}
 
 	s := strings.Builder{}
-	s.WriteString(r.Pipeline.String())
-	if r.MetricsPipeline != nil {
+	s.WriteString(r.Leaf.Pipeline.String())
+	if r.Leaf.MetricsPipeline != nil {
 		s.WriteString(" | ")
-		s.WriteString(r.MetricsPipeline.String())
+		s.WriteString(r.Leaf.MetricsPipeline.String())
 	}
-	if r.MetricsSecondStage != nil {
+	if r.Leaf.MetricsSecondStage != nil {
 		s.WriteString(" | ")
-		s.WriteString(r.MetricsSecondStage.String())
+		s.WriteString(r.Leaf.MetricsSecondStage.String())
 	}
-	if r.Hints != nil {
+	if r.Leaf.Hints != nil {
 		s.WriteString(" ")
-		s.WriteString(r.Hints.String())
+		s.WriteString(r.Leaf.Hints.String())
 	}
 	return s.String()
 }
