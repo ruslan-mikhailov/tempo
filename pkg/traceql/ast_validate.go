@@ -18,21 +18,31 @@ func (e *unsupportedError) Error() string {
 	return e.feature + " not yet supported"
 }
 
-func (r RootExpr) validate() error {
-	err := r.Pipeline.validate()
+func (e Expr) validate() error {
+	if !e.IsLeaf() {
+		if !e.Op.isArithmetic() {
+			return fmt.Errorf("unsupported math operation between queries: %s", e.Op)
+		}
+		if err := e.LHS.validate(); err != nil {
+			return err
+		}
+		return e.RHS.validate()
+	}
+
+	err := e.Leaf.Pipeline.validate()
 	if err != nil {
 		return err
 	}
 
-	if r.MetricsPipeline != nil {
-		err := r.MetricsPipeline.validate()
+	if e.Leaf.MetricsPipeline != nil {
+		err := e.Leaf.MetricsPipeline.validate()
 		if err != nil {
 			return err
 		}
 	}
 
-	if r.MetricsSecondStage != nil {
-		err := r.MetricsSecondStage.validate()
+	if e.Leaf.MetricsSecondStage != nil {
+		err := e.Leaf.MetricsSecondStage.validate()
 		if err != nil {
 			return err
 		}
@@ -40,14 +50,17 @@ func (r RootExpr) validate() error {
 
 	// extra validation to disallow compare() with second stage functions
 	// for example: `{} | compare({status=error}) | topk(10)` doesn't make sense
-	if r.MetricsPipeline != nil && r.MetricsSecondStage != nil {
-		// cast and check if the first stage is a compare operation
-		if _, ok := r.MetricsPipeline.(*MetricsCompare); ok {
+	if e.Leaf.MetricsPipeline != nil && e.Leaf.MetricsSecondStage != nil {
+		if _, ok := e.Leaf.MetricsPipeline.(*MetricsCompare); ok {
 			return fmt.Errorf("`compare()` cannot be used with second stage functions")
 		}
 	}
 
 	return nil
+}
+
+func (r RootExpr) validate() error {
+	return r.Expr.validate()
 }
 
 func (p Pipeline) validate() error {
