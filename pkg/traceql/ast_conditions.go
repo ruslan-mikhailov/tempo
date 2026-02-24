@@ -1,6 +1,12 @@
 package traceql
 
 func (r RootExpr) extractConditions(request *FetchSpansRequest) {
+	if !r.IsLeaf() {
+		r.LHS.extractConditions(request)
+		r.RHS.extractConditions(request)
+		return
+	}
+
 	r.Pipeline.extractConditions(request)
 	if r.MetricsPipeline != nil {
 		r.MetricsPipeline.extractConditions(request)

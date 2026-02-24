@@ -8,6 +8,10 @@ import (
 )
 
 func (r RootExpr) String() string {
+	if !r.IsLeaf() {
+		return "(" + r.LHS.String() + ") " + r.Op.String() + " (" + r.RHS.String() + ")"
+	}
+
 	s := strings.Builder{}
 	s.WriteString(r.Pipeline.String())
 	if r.MetricsPipeline != nil {

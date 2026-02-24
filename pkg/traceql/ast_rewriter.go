@@ -56,14 +56,24 @@ func (f *fieldExpressionRewriter) RewriteRoot(r *RootExpr) *RootExpr {
 		return r
 	}
 
+	if !r.IsLeaf() {
+		return &RootExpr{
+			Op:  r.Op,
+			LHS: f.RewriteRoot(r.LHS),
+			RHS: f.RewriteRoot(r.RHS),
+		}
+	}
+
 	pipeline, rwCount := f.rewritePipeline(r.Pipeline)
 
 	return &RootExpr{
-		Pipeline:           pipeline,
-		MetricsPipeline:    r.MetricsPipeline,
-		MetricsSecondStage: r.MetricsSecondStage,
-		Hints:              r.Hints,
-		OptimizationCount:  r.OptimizationCount + rwCount,
+		Expr: Expr{
+			Pipeline:           pipeline,
+			MetricsPipeline:    r.MetricsPipeline,
+			MetricsSecondStage: r.MetricsSecondStage,
+			Hints:              r.Hints,
+			OptimizationCount:  r.OptimizationCount + rwCount,
+		},
 	}
 }
 

@@ -19,6 +19,16 @@ func (e *unsupportedError) Error() string {
 }
 
 func (r RootExpr) validate() error {
+	if !r.IsLeaf() {
+		if !r.Op.isArithmetic() {
+			return fmt.Errorf("unsupported math operation between queries: %s", r.Op)
+		}
+		if err := r.LHS.validate(); err != nil {
+			return err
+		}
+		return r.RHS.validate()
+	}
+
 	err := r.Pipeline.validate()
 	if err != nil {
 		return err
@@ -41,7 +51,6 @@ func (r RootExpr) validate() error {
 	// extra validation to disallow compare() with second stage functions
 	// for example: `{} | compare({status=error}) | topk(10)` doesn't make sense
 	if r.MetricsPipeline != nil && r.MetricsSecondStage != nil {
-		// cast and check if the first stage is a compare operation
 		if _, ok := r.MetricsPipeline.(*MetricsCompare); ok {
 			return fmt.Errorf("`compare()` cannot be used with second stage functions")
 		}

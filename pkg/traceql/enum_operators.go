@@ -50,6 +50,10 @@ const (
 	OpRegexMatchNone
 )
 
+func (op Operator) isArithmetic() bool {
+	return op == OpAdd || op == OpSub || op == OpMult || op == OpDiv || op == OpMod || op == OpPower
+}
+
 func (op Operator) isBoolean() bool {
 	return op == OpOr ||
 		op == OpAnd ||
