@@ -134,7 +134,7 @@ func (s queryRangeSharder) RoundTrip(pipelineRequest pipeline.Request) (pipeline
 
 	var (
 		allowUnsafe           = s.overrides.UnsafeQueryHints(tenantID)
-		targetBytesPerRequest = s.jobSize(expr, allowUnsafe)
+		targetBytesPerRequest = s.jobSize(expr.Leaf, allowUnsafe)
 		cutoff                = time.Now().Add(-s.cfg.QueryBackendAfter)
 	)
 
@@ -374,9 +374,9 @@ func (s *queryRangeSharder) maxDuration(tenantID string) time.Duration {
 	return s.cfg.MaxDuration
 }
 
-func (s *queryRangeSharder) jobSize(expr *traceql.RootExpr, allowUnsafe bool) int {
+func (s *queryRangeSharder) jobSize(expr *traceql.Expr, allowUnsafe bool) int {
 	// If we have a query hint then use it
-	if v, ok := expr.Leaf.Hints.GetInt(traceql.HintJobSize, allowUnsafe); ok && v > 0 {
+	if v, ok := expr.Hints.GetInt(traceql.HintJobSize, allowUnsafe); ok && v > 0 {
 		return v
 	}
 
