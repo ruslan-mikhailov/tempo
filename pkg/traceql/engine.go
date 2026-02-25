@@ -43,6 +43,7 @@ func Compile(query string) (*RootExpr, SpansetFilterFunc, firstStageElement, sec
 		return nil, nil, nil, nil, nil, err
 	}
 
+	// TODO: support for sub-queries
 	return expr, expr.Expr.Leaf.Pipeline.evaluate, expr.Expr.Leaf.MetricsPipeline, expr.Expr.Leaf.MetricsSecondStage, req, nil
 }
 

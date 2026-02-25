@@ -961,6 +961,7 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 
 	// only run metrics second stage if we have second stage and query mode = final,
 	// as we are not sharding them now in lower layers.
+	// TODO: support for sub-queries
 	if metricsSecondStage != nil && mode == AggregateModeFinal {
 		metricsSecondStage.init(req)
 		mfe.metricsSecondStage = metricsSecondStage
