@@ -28,23 +28,50 @@ func NewEngine() *Engine {
 }
 
 func Compile(query string) (*RootExpr, SpansetFilterFunc, firstStageElement, secondStageElement, *FetchSpansRequest, error) {
-	expr, err := Parse(query)
+	expr, subQueries, err := CompileSubQueries(query)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-
-	req := &FetchSpansRequest{
-		AllConditions: true,
+	// TODO: this if is temporary and should be removed later
+	if len(subQueries) != 1 {
+		return nil, nil, nil, nil, nil, errors.New("query is not supported")
 	}
-	expr.extractConditions(req)
+	return expr, subQueries[0].eval, subQueries[0].metricsPipeline, subQueries[0].secondStage, subQueries[0].req, nil
+}
+
+type subQuery struct {
+	eval            SpansetFilterFunc
+	metricsPipeline firstStageElement
+	secondStage     secondStageElement
+	req             *FetchSpansRequest
+}
+
+func CompileSubQueries(query string) (*RootExpr, []subQuery, error) {
+	expr, err := Parse(query)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	err = expr.validate()
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, err
 	}
 
-	// TODO: support for sub-queries
-	return expr, expr.Expr.Leaf.Pipeline.evaluate, expr.Expr.Leaf.MetricsPipeline, expr.Expr.Leaf.MetricsSecondStage, req, nil
+	leaves := expr.Expr.CollectLeaves()
+	subQueries := make([]subQuery, 0, len(leaves))
+	for _, leaf := range leaves {
+		req := &FetchSpansRequest{
+			AllConditions: true,
+		}
+		expr.extractConditions(req)
+		subQueries = append(subQueries, subQuery{
+			eval:            leaf.Pipeline.evaluate,
+			metricsPipeline: leaf.MetricsPipeline,
+			secondStage:     leaf.MetricsSecondStage,
+			req:             req,
+		})
+	}
+	return expr, subQueries, nil
 }
 
 func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchRequest, spanSetFetcher SpansetFetcher, allowUnsafeQueryHints bool) (*tempopb.SearchResponse, error) {
