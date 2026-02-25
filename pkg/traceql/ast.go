@@ -54,6 +54,24 @@ type ExprLeaf struct {
 	MetricsSecondStage secondStageElement
 }
 
+func (e *Expr) CollectLeaves() []ExprLeaf {
+	leaves := make([]ExprLeaf, 0, 8)
+	e.collectLeaves(&leaves)
+	return leaves
+}
+
+func (e *Expr) collectLeaves(out *[]ExprLeaf) {
+	if e == nil {
+		return
+	}
+	if e.Leaf != nil {
+		*out = append(*out, *e.Leaf)
+	}
+
+	e.LHS.collectLeaves(out)
+	e.RHS.collectLeaves(out)
+}
+
 func (e *Expr) IsLeaf() bool {
 	return e.Leaf != nil
 }
