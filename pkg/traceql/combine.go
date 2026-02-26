@@ -320,7 +320,7 @@ func spansetID(ss *tempopb.SpanSet) string {
 
 type QueryRangeCombiner struct {
 	req     *tempopb.QueryRangeRequest
-	eval    *MetricsFrontendEvaluator
+	eval    MetricsFrontendEvaluator
 	metrics *tempopb.SearchMetrics
 
 	maxSeries        int
