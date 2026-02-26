@@ -1137,8 +1137,8 @@ func TestCountOverTimeInstantNsWithCutoff(t *testing.T) {
 		res2 := layer1.Results().ToProto(&req2)
 
 		// merge in L2
-		layer2.metricsPipeline.observeSeries(res1)
-		layer2.metricsPipeline.observeSeries(res2)
+		layer2.ObserveSeries(res1)
+		layer2.ObserveSeries(res2)
 
 		result, seriesCount, err := processLayer3(req, layer2.Results())
 		require.NoError(t, err)
@@ -2998,7 +2998,7 @@ func processLayer1AndLayer2(req *tempopb.QueryRangeRequest, in ...[]Span) (Serie
 		res := layer1.Results()
 		// Pass layer 1 to layer 2
 		// These are partial counts over time by bucket
-		layer2.metricsPipeline.observeSeries(res.ToProto(req))
+		layer2.ObserveSeries(res.ToProto(req))
 	}
 
 	return layer2.Results(), nil
