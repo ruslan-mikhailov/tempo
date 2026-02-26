@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	internalLabelMetaType = "__meta_type"
-	internalMetaTypeCount = "__count"
-	internalLabelBucket   = "__bucket"
-	maxExemplars          = 100
-	maxExemplarsPerBucket = 2
+	internalLabelMetaType      = "__meta_type"
+	internalMetaTypeCount      = "__count"
+	internalLabelBucket        = "__bucket"
+	internalLabelQueryFragment = "__query_fragment"
+	maxExemplars               = 100
+	maxExemplarsPerBucket      = 2
 	// NormalNaN is a quiet NaN. This is also math.NaN().
 	normalNaN uint64 = 0x7ff8000000000001
 )
@@ -1005,7 +1006,7 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		}
 	}
 
-	bme := make(batchMetricsEvaluator, 0, len(subQuery))
+	bme := make(batchMetricsEvaluator, len(subQuery))
 	for _, q := range subQuery {
 		if q.metricsPipeline == nil {
 			return nil, fmt.Errorf("not a metrics query")
@@ -1080,7 +1081,7 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		}
 
 		optimize(q.req)
-		bme = append(bme, me)
+		bme[q.query] = me
 	}
 
 	return bme, nil
@@ -1265,9 +1266,10 @@ func (e batchMetricsEvaluator) Metrics() (uint64, uint64, uint64) {
 
 func (e batchMetricsEvaluator) Results() SeriesSet {
 	merged := make(SeriesSet)
-	for _, eval := range e {
+	for q, eval := range e {
 		for k, v := range eval.Results() {
 			merged[k] = v
+			v.Labels = append(v.Labels, Label{Name: internalLabelQueryFragment, Value: NewStaticString(q)})
 		}
 	}
 	return merged

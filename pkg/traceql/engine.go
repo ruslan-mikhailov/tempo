@@ -40,6 +40,7 @@ func Compile(query string) (*RootExpr, SpansetFilterFunc, firstStageElement, sec
 }
 
 type subQuery struct {
+	query           string
 	eval            SpansetFilterFunc
 	metricsPipeline firstStageElement
 	secondStage     secondStageElement
@@ -65,6 +66,7 @@ func CompileSubQueries(query string) (*RootExpr, []subQuery, error) {
 		}
 		expr.extractConditions(req)
 		subQueries = append(subQueries, subQuery{
+			query:           leaf.String(),
 			eval:            leaf.Pipeline.evaluate,
 			metricsPipeline: leaf.MetricsPipeline,
 			secondStage:     leaf.MetricsSecondStage,
