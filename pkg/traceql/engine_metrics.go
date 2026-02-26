@@ -974,7 +974,7 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 // Dedupe spans parameter is an indicator of whether to expected duplicates in the datasource. For
 // example if the datasource is replication factor=1 or only a single block then we know there
 // aren't duplicates, and we can make some optimizations.
-func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOverlapCutoff float64, allowUnsafeQueryHints bool) (*MetricsEvaluator, error) {
+func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOverlapCutoff float64, allowUnsafeQueryHints bool) (MetricsEvaluator, error) {
 	if req.Start <= 0 {
 		return nil, fmt.Errorf("start required")
 	}
@@ -1012,7 +1012,7 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 	// This initializes all step buffers, counters, etc
 	metricsPipeline.init(req, AggregateModeRaw)
 
-	me := &MetricsEvaluator{
+	me := &metricsEvaluator{
 		storageReq:        storageReq,
 		metricsPipeline:   metricsPipeline,
 		timeOverlapCutoff: timeOverlapCutoff,
@@ -1218,7 +1218,14 @@ func lookup(needles []Attribute, haystack Span) Static {
 	return NewStaticNil()
 }
 
-type MetricsEvaluator struct {
+type MetricsEvaluator interface {
+	Do(ctx context.Context, f SpansetFetcher, fetcherStart, fetcherEnd uint64, maxSeries int) error
+	Length() int
+	Metrics() (uint64, uint64, uint64)
+	Results() SeriesSet
+}
+
+type metricsEvaluator struct {
 	start, end                      uint64
 	checkTime                       bool
 	maxExemplars, exemplarCount     int
@@ -1244,7 +1251,7 @@ func timeRangeOverlap(reqStart, reqEnd, dataStart, dataEnd uint64) float64 {
 // Do metrics on the given source of data and merge the results into the working set.  Optionally, if provided,
 // uses the known time range of the data for last-minute optimizations. Time range is unix nanos
 
-func (e *MetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStart, fetcherEnd uint64, maxSeries int) error {
+func (e *metricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStart, fetcherEnd uint64, maxSeries int) error {
 	// Make a copy of the request so we can modify it.
 	storageReq := *e.storageReq
 
@@ -1352,18 +1359,18 @@ func (e *MetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStar
 	return nil
 }
 
-func (e *MetricsEvaluator) Length() int {
+func (e *metricsEvaluator) Length() int {
 	return e.metricsPipeline.length()
 }
 
-func (e *MetricsEvaluator) Metrics() (uint64, uint64, uint64) {
+func (e *metricsEvaluator) Metrics() (uint64, uint64, uint64) {
 	e.mtx.Lock()
 	defer e.mtx.Unlock()
 
 	return e.bytes, e.spansTotal, e.spansDeduped
 }
 
-func (e *MetricsEvaluator) Results() SeriesSet {
+func (e *metricsEvaluator) Results() SeriesSet {
 	e.mtx.Lock()
 	defer e.mtx.Unlock()
 
@@ -1388,7 +1395,7 @@ func (e *MetricsEvaluator) Results() SeriesSet {
 	return ss
 }
 
-func (e *MetricsEvaluator) sampleExemplar(id []byte) bool {
+func (e *metricsEvaluator) sampleExemplar(id []byte) bool {
 	if len(e.exemplarMap) >= e.maxExemplars {
 		return false
 	}

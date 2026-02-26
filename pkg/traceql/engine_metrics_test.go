@@ -518,7 +518,7 @@ func TestCompileMetricsQueryRangeExemplarsHint(t *testing.T) {
 
 		require.NoError(t, err)
 		require.NotNil(t, eval)
-		require.Equal(t, tc.expectedCount, eval.maxExemplars)
+		require.Equal(t, tc.expectedCount, eval.(*metricsEvaluator).maxExemplars)
 	}
 }
 
@@ -635,8 +635,9 @@ func TestCompileMetricsQueryRangeFetchSpansRequest(t *testing.T) {
 			require.NoError(t, err)
 
 			// Nil out func to Equal works
-			eval.storageReq.SecondPass = nil
-			require.Equal(t, tc.expectedReq, *eval.storageReq)
+			me := eval.(*metricsEvaluator)
+			me.storageReq.SecondPass = nil
+			require.Equal(t, tc.expectedReq, *me.storageReq)
 		})
 	}
 }
@@ -1094,14 +1095,14 @@ func TestCountOverTimeInstantNsWithCutoff(t *testing.T) {
 		layer1, err := e.CompileMetricsQueryRange(&req1, 0, false)
 		require.NoError(t, err)
 		for _, s := range in1 {
-			layer1.metricsPipeline.observe(s)
+			layer1.(*metricsEvaluator).metricsPipeline.observe(s)
 		}
 		res1 := layer1.Results().ToProto(&req1)
 
 		layer1, err = e.CompileMetricsQueryRange(&req2, 0, false)
 		require.NoError(t, err)
 		for _, s := range in2 {
-			layer1.metricsPipeline.observe(s)
+			layer1.(*metricsEvaluator).metricsPipeline.observe(s)
 		}
 		res2 := layer1.Results().ToProto(&req2)
 
@@ -1696,13 +1697,13 @@ func TestObserveSeriesAverageOverTimeForSpanAttribute(t *testing.T) {
 	layer3, _ := e.CompileMetricsQueryRangeNonRaw(req, AggregateModeFinal)
 
 	for _, s := range in {
-		layer1A.metricsPipeline.observe(s)
+		layer1A.(*metricsEvaluator).metricsPipeline.observe(s)
 	}
 
 	layer2A.ObserveSeries(layer1A.Results().ToProto(req))
 
 	for _, s := range in2 {
-		layer1B.metricsPipeline.observe(s)
+		layer1B.(*metricsEvaluator).metricsPipeline.observe(s)
 	}
 
 	layer2B.ObserveSeries(layer1B.Results().ToProto(req))
@@ -1771,13 +1772,13 @@ func TestObserveSeriesAverageOverTimeForSpanAttributeWithTruncation(t *testing.T
 	layer3, _ := e.CompileMetricsQueryRangeNonRaw(req, AggregateModeFinal)
 
 	for _, s := range in {
-		layer1A.metricsPipeline.observe(s)
+		layer1A.(*metricsEvaluator).metricsPipeline.observe(s)
 	}
 
 	layer2A.ObserveSeries(layer1A.Results().ToProto(req))
 
 	for _, s := range in2 {
-		layer1B.metricsPipeline.observe(s)
+		layer1B.(*metricsEvaluator).metricsPipeline.observe(s)
 	}
 
 	layer2B.ObserveSeries(layer1B.Results().ToProto(req))
@@ -2842,7 +2843,7 @@ func processLayer1AndLayer2(req *tempopb.QueryRangeRequest, in ...[]Span) (Serie
 			return nil, err
 		}
 		for _, s := range spanSet {
-			layer1.metricsPipeline.observe(s)
+			layer1.(*metricsEvaluator).metricsPipeline.observe(s)
 		}
 		res := layer1.Results()
 		// Pass layer 1 to layer 2
