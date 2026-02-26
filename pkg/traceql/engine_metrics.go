@@ -279,6 +279,15 @@ func (ls Labels) Has(name string) bool {
 	return false
 }
 
+func (ls Labels) GetValue(name string) Static {
+	for _, l := range ls {
+		if l.Name == name {
+			return l.Value
+		}
+	}
+	return NewStaticNil()
+}
+
 // String returns the prometheus-formatted version of the labels. Which is downcasting
 // the typed TraceQL values to strings, with some special casing.
 func (ls Labels) String() string {
@@ -935,7 +944,7 @@ func (u *UngroupedAggregator) Series() SeriesSet {
 	}
 }
 
-func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, mode AggregateMode) (*MetricsFrontendEvaluator, error) {
+func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, mode AggregateMode) (MetricsFrontendEvaluator, error) {
 	if req.Exemplars > maxExemplars {
 		level.Warn(log.Logger).Log("msg", "capping exemplars to safety limit", "requested", req.Exemplars, "cap", maxExemplars)
 		req.Exemplars = maxExemplars
@@ -954,30 +963,29 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 		return nil, fmt.Errorf("step required")
 	}
 
-	_, _, metricsPipeline, metricsSecondStage, _, err := Compile(req.Query)
+	expr, subQueries, err := CompileSubQueries(req.Query)
 	if err != nil {
 		return nil, fmt.Errorf("compiling query: %w", err)
 	}
 
-	// for metrics queries, we need a metrics pipeline
-	if metricsPipeline == nil {
-		return nil, fmt.Errorf("not a metrics query")
+	for i, q := range subQueries {
+		// for metrics queries, we need a metrics pipeline
+		if q.metricsPipeline == nil {
+			return nil, fmt.Errorf("not a metrics query")
+		}
+
+		q.metricsPipeline.init(req, mode)
+
+		// only run metrics second stage if we have second stage and query mode = final,
+		// as we are not sharding them now in lower layers.
+		if q.secondStage != nil && mode == AggregateModeFinal {
+			q.secondStage.init(req)
+		} else {
+			subQueries[i].secondStage = nil // set explicitly
+		}
 	}
 
-	metricsPipeline.init(req, mode)
-	mfe := &MetricsFrontendEvaluator{
-		metricsPipeline: metricsPipeline,
-	}
-
-	// only run metrics second stage if we have second stage and query mode = final,
-	// as we are not sharding them now in lower layers.
-	// TODO: support for sub-queries
-	if metricsSecondStage != nil && mode == AggregateModeFinal {
-		metricsSecondStage.init(req)
-		mfe.metricsSecondStage = metricsSecondStage
-	}
-
-	return mfe, nil
+	return NewMetricsFrontendEvaluator(expr, subQueries, mode), nil
 }
 
 // CompileMetricsQueryRange returns an evaluator that can be reused across multiple data sources.
@@ -1468,41 +1476,199 @@ func (e *metricsEvaluator) sampleExemplar(id []byte) bool {
 
 // MetricsFrontendEvaluator pipes the sharded job results back into the engine for the rest
 // of the pipeline.  i.e. This evaluator is for the query-frontend.
-type MetricsFrontendEvaluator struct {
-	mtx                sync.Mutex
-	metricsPipeline    firstStageElement
-	metricsSecondStage secondStageElement
+type MetricsFrontendEvaluator interface {
+	ObserveSeries([]*tempopb.TimeSeries)
+	Results() SeriesSet
+	Length() int
 }
 
-func (m *MetricsFrontendEvaluator) ObserveSeries(in []*tempopb.TimeSeries) {
+func NewMetricsFrontendEvaluator(rootExpr *RootExpr, subQueries []subQuery, mode AggregateMode) MetricsFrontendEvaluator {
+	subQieriesM := make(map[string]subQuery, len(subQueries))
+	for _, q := range subQueries {
+		subQieriesM[q.query] = q
+	}
+
+	mfe := &metricsFrontendEvaluator{
+		rootExpr:   rootExpr,
+		mtx:        sync.Mutex{},
+		subQueries: subQieriesM,
+	}
+	switch mode {
+	case AggregateModeSum:
+		return &metricsFrontendEvaluatorSum{mfe}
+	case AggregateModeFinal:
+		return &metricsFrontendEvaluatorFinal{mfe}
+	default:
+		panic("unexpected mode") // should never happen
+	}
+}
+
+type metricsFrontendEvaluatorFinal struct {
+	*metricsFrontendEvaluator
+}
+
+type metricsFrontendEvaluatorSum struct {
+	*metricsFrontendEvaluator
+}
+
+type metricsFrontendEvaluator struct {
+	rootExpr   *RootExpr
+	mtx        sync.Mutex
+	subQueries map[string]subQuery
+}
+
+func (m *metricsFrontendEvaluator) ObserveSeries(in []*tempopb.TimeSeries) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
-	m.metricsPipeline.observeSeries(in)
+	fragmens := make(map[string][]*tempopb.TimeSeries, len(m.subQueries))
+	for _, ts := range in {
+		for _, label := range ts.Labels {
+			if label.GetKey() == internalLabelQueryFragment {
+				fragmentKey := label.GetValue().GetStringValue()
+				fragmens[fragmentKey] = append(fragmens[fragmentKey], ts)
+				break
+			}
+		}
+	}
+	for k, v := range fragmens {
+		if q := m.subQueries[k]; q.metricsPipeline != nil {
+			q.metricsPipeline.observeSeries(v)
+		}
+	}
 }
 
-func (m *MetricsFrontendEvaluator) Results() SeriesSet {
+func (m *metricsFrontendEvaluator) Length() int {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
+	var length int
+	for _, q := range m.subQueries {
+		length += q.metricsPipeline.length()
+	}
+	return length
+}
+
+func (m *metricsFrontendEvaluator) processSubQuery(q subQuery) SeriesSet {
 	// Job results are not scaled by sampling, but this is here for the interface.
-	results := m.metricsPipeline.result(1.0)
+	results := q.metricsPipeline.result(1.0)
 
-	if m.metricsSecondStage != nil {
+	if q.secondStage != nil {
 		// metrics second stage is only set when query has second stage function and mode = final
 		// if we have metrics second stage, pass first stage results through
 		// second stage for further processing.
-		results = m.metricsSecondStage.process(results)
+		results = q.secondStage.process(results)
 	}
-
 	return results
 }
 
-func (m *MetricsFrontendEvaluator) Length() int {
+func (m *metricsFrontendEvaluatorSum) Results() SeriesSet {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
-	return m.metricsPipeline.length()
+	result := make(SeriesSet, len(m.subQueries))
+	for _, q := range m.subQueries {
+		for k, v := range m.processSubQuery(q) {
+			result[k] = v
+		}
+	}
+	return result
+}
+
+func (m *metricsFrontendEvaluatorFinal) Results() SeriesSet {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
+	fragments := make(map[string]SeriesSet, len(m.subQueries))
+	for k, q := range m.subQueries {
+		results := m.processSubQuery(q)
+		fragment := make(SeriesSet, len(results))
+		for smk, v := range results {
+			key := SeriesMapKey{}
+			j := 0
+			stripped := make(Labels, 0, len(v.Labels))
+			for i := range smk {
+				if smk[i].Name == labels.MetricName || smk[i].Name == internalLabelQueryFragment {
+					continue
+				}
+				key[j] = smk[i]
+				j++
+			}
+			for _, l := range v.Labels {
+				if l.Name != internalLabelQueryFragment {
+					stripped = append(stripped, l)
+				}
+			}
+			v.Labels = stripped
+			fragment[key] = v
+		}
+		fragments[k] = fragment
+	}
+
+	result := evaluateMathExpr(&m.rootExpr.Expr, fragments)
+	// Re-key by full labels so the output SeriesSet is consistent.
+	out := make(SeriesSet, len(result))
+	for _, v := range result {
+		out[v.Labels.MapKey()] = v
+	}
+	return out
+}
+
+func evaluateMathExpr(e *Expr, fragments map[string]SeriesSet) SeriesSet {
+	if e.IsLeaf() {
+		return fragments[e.Leaf.String()]
+	}
+	lhs := evaluateMathExpr(e.LHS, fragments)
+	rhs := evaluateMathExpr(e.RHS, fragments)
+	return applyBinaryOp(e.Op, lhs, rhs)
+}
+
+func applyBinaryOp(op Operator, lhs, rhs SeriesSet) SeriesSet {
+	result := make(SeriesSet)
+	for k, l := range lhs {
+		r, ok := rhs[k]
+		if !ok {
+			continue
+		}
+		result[k] = applyTimeSeries(op, l, r, l.Labels)
+	}
+	return result
+}
+
+func applyTimeSeries(op Operator, lhs, rhs TimeSeries, labels Labels) TimeSeries {
+	n := len(lhs.Values)
+	if len(rhs.Values) < n {
+		n = len(rhs.Values)
+	}
+	values := make([]float64, n)
+	for i := 0; i < n; i++ {
+		values[i] = applyArithmeticOp(op, lhs.Values[i], rhs.Values[i])
+	}
+	return TimeSeries{Labels: labels, Values: values}
+}
+
+func applyArithmeticOp(op Operator, lhs, rhs float64) float64 {
+	if math.IsNaN(lhs) {
+		lhs = 0
+	}
+	if math.IsNaN(rhs) {
+		rhs = 0
+	}
+	switch op {
+	case OpAdd:
+		return lhs + rhs
+	case OpSub:
+		return lhs - rhs
+	case OpMult:
+		return lhs * rhs
+	case OpDiv:
+		if rhs == 0 {
+			return math.NaN()
+		}
+		return lhs / rhs
+	default:
+		return math.NaN()
+	}
 }
 
 type SeriesAggregator interface {

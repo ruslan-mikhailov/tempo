@@ -11,15 +11,18 @@ func (e Expr) String() string {
 	if !e.IsLeaf() {
 		return "(" + e.LHS.String() + ") " + e.Op.String() + " (" + e.RHS.String() + ")"
 	}
+	return e.Leaf.String()
+}
 
+func (e ExprLeaf) String() string {
 	s := strings.Builder{}
-	s.WriteString(e.Leaf.Pipeline.String())
-	if e.Leaf.MetricsPipeline != nil {
+	s.WriteString(e.Pipeline.String())
+	if e.MetricsPipeline != nil {
 		s.WriteString(" | ")
-		s.WriteString(e.Leaf.MetricsPipeline.String())
+		s.WriteString(e.MetricsPipeline.String())
 	}
-	if e.Leaf.MetricsSecondStage != nil {
-		s.WriteString(e.Leaf.MetricsSecondStage.String())
+	if e.MetricsSecondStage != nil {
+		s.WriteString(e.MetricsSecondStage.String())
 	}
 	return s.String()
 }
