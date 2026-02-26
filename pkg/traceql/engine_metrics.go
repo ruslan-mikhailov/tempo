@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	internalLabelMetaType = "__meta_type"
-	internalMetaTypeCount = "__count"
-	internalLabelBucket   = "__bucket"
-	maxExemplarsPerBucket = 2
+	internalLabelMetaType      = "__meta_type"
+	internalMetaTypeCount      = "__count"
+	internalLabelBucket        = "__bucket"
+	internalLabelQueryFragment = "__query_fragment"
+	maxExemplarsPerBucket      = 2
 	// maxExemplars is a safety cap applied at the engine entry points to bound memory
 	// usage regardless of what the caller requests.
 	maxExemplars uint32 = 100000
@@ -1233,6 +1234,51 @@ type MetricsEvaluator interface {
 	Length() int
 	Metrics() (uint64, uint64, uint64)
 	Results() SeriesSet
+}
+
+type batchMetricsEvaluator map[string]MetricsEvaluator
+
+var _ = (MetricsEvaluator)(batchMetricsEvaluator(nil))
+
+func (e batchMetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStart, fetcherEnd uint64, maxSeries int) error {
+	var err error
+	for _, eval := range e {
+		err = eval.Do(ctx, f, fetcherStart, fetcherEnd, maxSeries)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e batchMetricsEvaluator) Length() int {
+	var total int
+	for _, eval := range e {
+		total += eval.Length()
+	}
+	return total
+}
+
+func (e batchMetricsEvaluator) Metrics() (uint64, uint64, uint64) {
+	var bytes, spansTotal, spansDeduped uint64
+	for _, eval := range e {
+		b, st, sd := eval.Metrics()
+		bytes += b
+		spansTotal += st
+		spansDeduped += sd
+	}
+	return bytes, spansTotal, spansDeduped
+}
+
+func (e batchMetricsEvaluator) Results() SeriesSet {
+	merged := make(SeriesSet)
+	for q, eval := range e {
+		for _, v := range eval.Results() {
+			v.Labels = v.Labels.Add(Label{Name: internalLabelQueryFragment, Value: NewStaticString(q)})
+			merged[v.Labels.MapKey()] = v
+		}
+	}
+	return merged
 }
 
 type metricsEvaluator struct {
