@@ -25,7 +25,7 @@ import (
 )
 
 // QueryRange returns metrics.
-func (p *Processor) QueryRange(ctx context.Context, req tempopb.QueryRangeRequest, rawEval traceql.MetricsEvaluator, jobEval *traceql.MetricsFrontendEvaluator) error {
+func (p *Processor) QueryRange(ctx context.Context, req tempopb.QueryRangeRequest, rawEval traceql.MetricsEvaluator, jobEval traceql.MetricsFrontendEvaluator) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
