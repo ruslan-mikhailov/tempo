@@ -1225,6 +1225,50 @@ type MetricsEvaluator interface {
 	Results() SeriesSet
 }
 
+type batchMetricsEvaluator map[string]MetricsEvaluator
+
+var _ = (MetricsEvaluator)(batchMetricsEvaluator(nil))
+
+func (e batchMetricsEvaluator) Do(ctx context.Context, f SpansetFetcher, fetcherStart, fetcherEnd uint64, maxSeries int) error {
+	var err error
+	for _, eval := range e {
+		err = eval.Do(ctx, f, fetcherStart, fetcherEnd, maxSeries)
+		if err != nil {
+			return nil
+		}
+	}
+	return nil
+}
+
+func (e batchMetricsEvaluator) Length() int {
+	var total int
+	for _, eval := range e {
+		total += eval.Length()
+	}
+	return total
+}
+
+func (e batchMetricsEvaluator) Metrics() (uint64, uint64, uint64) {
+	var bytes, spansTotal, spansDeduped uint64
+	for _, eval := range e {
+		b, st, sd := eval.Metrics()
+		bytes += b
+		spansTotal += st
+		spansDeduped += sd
+	}
+	return bytes, spansTotal, spansDeduped
+}
+
+func (e batchMetricsEvaluator) Results() SeriesSet {
+	merged := make(SeriesSet)
+	for _, eval := range e {
+		for k, v := range eval.Results() {
+			merged[k] = v
+		}
+	}
+	return merged
+}
+
 type metricsEvaluator struct {
 	start, end                      uint64
 	checkTime                       bool
