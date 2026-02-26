@@ -1000,97 +1000,99 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		return nil, fmt.Errorf("step required")
 	}
 
-	expr, eval, metricsPipeline, _, storageReq, err := Compile(req.Query)
+	expr, subQuery, err := CompileSubQueries(req.Query)
 	if err != nil {
 		return nil, fmt.Errorf("compiling query: %w", err)
 	}
 
 	needsFullTrace := expr.NeedsFullTrace()
 
-	if metricsPipeline == nil {
-		return nil, fmt.Errorf("not a metrics query")
-	}
+	bme := make(batchMetricsEvaluator, len(subQuery))
+	for _, q := range subQuery {
+		if q.metricsPipeline == nil {
+			return nil, fmt.Errorf("not a metrics query")
+		}
+		// This initializes all step buffers, counters, etc
+		q.metricsPipeline.init(req, AggregateModeRaw)
+		e.applySampleHints(expr, q.req, allowUnsafeQueryHints)
 
-	e.applySampleHints(expr, storageReq, allowUnsafeQueryHints)
+		me := &metricsEvaluator{
+			storageReq:        q.req,
+			metricsPipeline:   q.metricsPipeline,
+			timeOverlapCutoff: timeOverlapCutoff,
+			maxExemplars:      int(req.Exemplars),
+			exemplarMap:       make(map[string]struct{}, req.Exemplars), // TODO: Lazy, use bloom filter, CM sketch or something
+			needsFullTrace:    needsFullTrace,
+		}
 
-	// This initializes all step buffers, counters, etc
-	metricsPipeline.init(req, AggregateModeRaw)
+		if b, ok := expr.Hints.GetBool("new", true); ok {
+			me.newFetch = b
+		}
 
-	me := &metricsEvaluator{
-		storageReq:        storageReq,
-		metricsPipeline:   metricsPipeline,
-		timeOverlapCutoff: timeOverlapCutoff,
-		maxExemplars:      int(req.Exemplars),
-		exemplarMap:       make(map[string]struct{}, req.Exemplars), // TODO: Lazy, use bloom filter, CM sketch or something
-		needsFullTrace:    needsFullTrace,
-	}
+		// If the request range is fully aligned to the step, then we can use lower
+		// precision data that matches the step while still returning accurate results.
+		// When the range isn't an even multiple, it means that we are on the split
+		// between backend and recent data, or the edges of the request. In that case
+		// we use full nanosecond precision.
+		var precision time.Duration
+		if (req.Start%req.Step) == 0 && (req.End%req.Step) == 0 {
+			precision = time.Duration(req.Step)
+		}
 
-	if b, ok := expr.Hints.GetBool("new", true); ok {
-		me.newFetch = b
-	}
-
-	// If the request range is fully aligned to the step, then we can use lower
-	// precision data that matches the step while still returning accurate results.
-	// When the range isn't an even multiple, it means that we are on the split
-	// between backend and recent data, or the edges of the request. In that case
-	// we use full nanosecond precision.
-	var precision time.Duration
-	if (req.Start%req.Step) == 0 && (req.End%req.Step) == 0 {
-		precision = time.Duration(req.Step)
-	}
-
-	// Span start time (always required)
-	if !storageReq.HasAttribute(IntrinsicSpanStartTimeAttribute) {
-		// Technically we only need the start time of matching spans, so we add it to the second pass.
-		// However this is often optimized back to the first pass when it lets us avoid a second pass altogether.
-		storageReq.SecondPassConditions = append(storageReq.SecondPassConditions, Condition{Attribute: IntrinsicSpanStartTimeAttribute, Precision: precision})
-	} else {
-		// Update the existing condition to use low precision
-		for i, c := range storageReq.Conditions {
-			if c.Attribute == IntrinsicSpanStartTimeAttribute {
-				storageReq.Conditions[i].Precision = precision
-				break
+		// Span start time (always required)
+		if !q.req.HasAttribute(IntrinsicSpanStartTimeAttribute) {
+			// Technically we only need the start time of matching spans, so we add it to the second pass.
+			// However this is often optimized back to the first pass when it lets us avoid a second pass altogether.
+			q.req.SecondPassConditions = append(q.req.SecondPassConditions, Condition{Attribute: IntrinsicSpanStartTimeAttribute, Precision: precision})
+		} else {
+			// Update the existing condition to use low precision
+			for i, c := range q.req.Conditions {
+				if c.Attribute == IntrinsicSpanStartTimeAttribute {
+					q.req.Conditions[i].Precision = precision
+					break
+				}
 			}
 		}
+
+		// Timestamp filtering
+		// (1) Include any overlapping trace
+		//     It can be faster to skip the trace-level timestamp check
+		//     when all or most of the traces overlap the window.
+		//     So this is done dynamically on a per-fetcher basis in Do()
+		// (2) Only include spans that started in this time frame.
+		//     This is checked outside the fetch layer in the evaluator. Timestamp
+		//     is only checked on the spans that are the final results.
+		// TODO - I think there are cases where we can push this down.
+		// Queries like {status=error} | rate() don't assert inter-span conditions
+		// and we could filter on span start time without affecting correctness.
+		// Queries where we can't are like:  {A} >> {B} | rate() because only require
+		// that {B} occurs within our time range but {A} is allowed to occur any time.
+		me.checkTime = true
+		me.start = req.Start
+		me.end = req.End
+
+		if me.maxExemplars > 0 {
+			cb := func() bool { return me.exemplarCount < me.maxExemplars }
+			meta := ExemplarMetaConditionsWithout(cb, q.req.SecondPassConditions, q.req.AllConditions)
+			q.req.SecondPassConditions = append(q.req.SecondPassConditions, meta...)
+		}
+		// Setup second pass callback.  It might be optimized away
+		ssBuf := make([]*Spanset, 1)
+		q.req.SecondPass = func(s *Spanset) ([]*Spanset, error) {
+			// The traceql engine isn't thread-safe.
+			// But parallelization is required for good metrics performance.
+			// So we do external locking here.
+			me.mtx.Lock()
+			defer me.mtx.Unlock()
+			ssBuf[0] = s
+			return q.eval(ssBuf)
+		}
+
+		optimize(q.req)
+		bme[q.query] = me
 	}
 
-	// Timestamp filtering
-	// (1) Include any overlapping trace
-	//     It can be faster to skip the trace-level timestamp check
-	//     when all or most of the traces overlap the window.
-	//     So this is done dynamically on a per-fetcher basis in Do()
-	// (2) Only include spans that started in this time frame.
-	//     This is checked outside the fetch layer in the evaluator. Timestamp
-	//     is only checked on the spans that are the final results.
-	// TODO - I think there are cases where we can push this down.
-	// Queries like {status=error} | rate() don't assert inter-span conditions
-	// and we could filter on span start time without affecting correctness.
-	// Queries where we can't are like:  {A} >> {B} | rate() because only require
-	// that {B} occurs within our time range but {A} is allowed to occur any time.
-	me.checkTime = true
-	me.start = req.Start
-	me.end = req.End
-
-	if me.maxExemplars > 0 {
-		cb := func() bool { return me.exemplarCount < me.maxExemplars }
-		meta := ExemplarMetaConditionsWithout(cb, storageReq.SecondPassConditions, storageReq.AllConditions)
-		storageReq.SecondPassConditions = append(storageReq.SecondPassConditions, meta...)
-	}
-	// Setup second pass callback.  It might be optimized away
-	ssBuf := make([]*Spanset, 1)
-	storageReq.SecondPass = func(s *Spanset) ([]*Spanset, error) {
-		// The traceql engine isn't thread-safe.
-		// But parallelization is required for good metrics performance.
-		// So we do external locking here.
-		me.mtx.Lock()
-		defer me.mtx.Unlock()
-		ssBuf[0] = s
-		return eval(ssBuf)
-	}
-
-	optimize(storageReq)
-
-	return me, nil
+	return bme, nil
 }
 
 func (e *Engine) applySampleHints(expr *RootExpr, req *FetchSpansRequest, allowUnsafeQueryHints bool) {
