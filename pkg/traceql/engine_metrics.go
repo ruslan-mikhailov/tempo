@@ -1007,45 +1007,7 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 			exemplars = 0
 		}
 	}
-
-	// Debug sampling hints, remove once we settle on approach.
-	if traceSample, traceSampleOk := expr.Hints.GetFloat(HintTraceSample, allowUnsafeQueryHints); traceSampleOk {
-		storageReq.TraceSampler = newProbablisticSampler(traceSample)
-	}
-	if spanSample, spanSampleOk := expr.Hints.GetFloat(HintSpanSample, allowUnsafeQueryHints); spanSampleOk {
-		storageReq.SpanSampler = newProbablisticSampler(spanSample)
-	}
-
-	if sample, sampleOk := expr.Hints.GetBool(HintSample, allowUnsafeQueryHints); sampleOk && sample {
-		// Automatic sampling
-		// Get other params
-		s := newAdaptiveSampler()
-		if debug, ok := expr.Hints.GetBool(HintDebug, allowUnsafeQueryHints); ok {
-			s.debug = debug
-		}
-		if info, ok := expr.Hints.GetBool(HintInfo, allowUnsafeQueryHints); ok {
-			s.info = info
-		}
-
-		// Classify the query and determine if it needs to be at the trace-level or can be at span-level (better)
-		if expr.NeedsFullTrace() {
-			storageReq.TraceSampler = s
-		} else {
-			storageReq.SpanSampler = s
-		}
-	}
-
-	if sampleFraction, ok := expr.Hints.GetFloat(HintSample, allowUnsafeQueryHints); ok && sampleFraction > 0 && sampleFraction < 1 {
-		// Fixed sampling rate.
-		s := newProbablisticSampler(sampleFraction)
-
-		// Classify the query and determine if it needs to be at the trace-level or can be at span-level (better)
-		if expr.NeedsFullTrace() {
-			storageReq.TraceSampler = s
-		} else {
-			storageReq.SpanSampler = s
-		}
-	}
+	e.applySampleHints(expr, storageReq, allowUnsafeQueryHints)
 
 	// This initializes all step buffers, counters, etc
 	metricsPipeline.init(req, AggregateModeRaw)
@@ -1118,6 +1080,47 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 	optimize(storageReq)
 
 	return me, nil
+}
+
+func (e *Engine) applySampleHints(expr *RootExpr, req *FetchSpansRequest, allowUnsafeQueryHints bool) {
+	// Debug sampling hints, remove once we settle on approach.
+	if traceSample, traceSampleOk := expr.Hints.GetFloat(HintTraceSample, allowUnsafeQueryHints); traceSampleOk {
+		req.TraceSampler = newProbablisticSampler(traceSample)
+	}
+	if spanSample, spanSampleOk := expr.Hints.GetFloat(HintSpanSample, allowUnsafeQueryHints); spanSampleOk {
+		req.SpanSampler = newProbablisticSampler(spanSample)
+	}
+
+	if sample, sampleOk := expr.Hints.GetBool(HintSample, allowUnsafeQueryHints); sampleOk && sample {
+		// Automatic sampling
+		// Get other params
+		s := newAdaptiveSampler()
+		if debug, ok := expr.Hints.GetBool(HintDebug, allowUnsafeQueryHints); ok {
+			s.debug = debug
+		}
+		if info, ok := expr.Hints.GetBool(HintInfo, allowUnsafeQueryHints); ok {
+			s.info = info
+		}
+
+		// Classify the query and determine if it needs to be at the trace-level or can be at span-level (better)
+		if expr.NeedsFullTrace() {
+			req.TraceSampler = s
+		} else {
+			req.SpanSampler = s
+		}
+	}
+
+	if sampleFraction, ok := expr.Hints.GetFloat(HintSample, allowUnsafeQueryHints); ok && sampleFraction > 0 && sampleFraction < 1 {
+		// Fixed sampling rate.
+		s := newProbablisticSampler(sampleFraction)
+
+		// Classify the query and determine if it needs to be at the trace-level or can be at span-level (better)
+		if expr.NeedsFullTrace() {
+			req.TraceSampler = s
+		} else {
+			req.SpanSampler = s
+		}
+	}
 }
 
 // optimize numerous things within the request that is specific to metrics.
