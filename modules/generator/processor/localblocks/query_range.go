@@ -25,7 +25,7 @@ import (
 )
 
 // QueryRange returns metrics.
-func (p *Processor) QueryRange(ctx context.Context, req tempopb.QueryRangeRequest, rawEval *traceql.MetricsEvaluator, jobEval *traceql.MetricsFrontendEvaluator) error {
+func (p *Processor) QueryRange(ctx context.Context, req tempopb.QueryRangeRequest, rawEval traceql.MetricsEvaluator, jobEval *traceql.MetricsFrontendEvaluator) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -143,7 +143,7 @@ func (p *Processor) QueryRange(ctx context.Context, req tempopb.QueryRangeReques
 	return nil
 }
 
-func (p *Processor) queryRangeWALBlock(ctx context.Context, b common.WALBlock, eval *traceql.MetricsEvaluator, maxSeries int) error {
+func (p *Processor) queryRangeWALBlock(ctx context.Context, b common.WALBlock, eval traceql.MetricsEvaluator, maxSeries int) error {
 	m := b.BlockMeta()
 	ctx, span := tracer.Start(ctx, "Processor.QueryRange.WALBlock", trace.WithAttributes(
 		attribute.String("block", m.BlockID.String()),
