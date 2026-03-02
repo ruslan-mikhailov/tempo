@@ -81,6 +81,7 @@ func TestQueryRangeHandlerSucceeds(t *testing.T) {
 	require.Equal(t, 200, httpResp.Code)
 
 	expectedResp := &tempopb.QueryRangeResponse{
+		Step: uint64(100 * time.Second),
 		Metrics: &tempopb.SearchMetrics{
 			CompletedJobs:   4, // 2 blocks, each with 2 row groups that take 1 job
 			InspectedTraces: 4,

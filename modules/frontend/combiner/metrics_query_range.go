@@ -99,6 +99,7 @@ func NewQueryRange(req *tempopb.QueryRangeRequest, maxSeriesLimit int) (Combiner
 			}
 			attachExemplars(req, resp)
 			resp.Metrics = metricsCombiner.Metrics
+			resp.Step = req.Step
 			return resp, nil
 		},
 		diff: func(_ *tempopb.QueryRangeResponse) (*tempopb.QueryRangeResponse, error) {
@@ -110,6 +111,7 @@ func NewQueryRange(req *tempopb.QueryRangeRequest, maxSeriesLimit int) (Combiner
 				return &tempopb.QueryRangeResponse{
 					Series:  []*tempopb.TimeSeries{},
 					Metrics: metricsCombiner.Metrics,
+					Step:    req.Step,
 				}, nil
 			}
 
@@ -139,6 +141,7 @@ func NewQueryRange(req *tempopb.QueryRangeRequest, maxSeriesLimit int) (Combiner
 			}
 			attachExemplars(req, resp)
 			resp.Metrics = metricsCombiner.Metrics
+			resp.Step = req.Step
 
 			return resp, nil
 		},

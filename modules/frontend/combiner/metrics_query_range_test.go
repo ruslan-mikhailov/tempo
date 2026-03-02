@@ -392,6 +392,32 @@ func TestQueryRangeMaxSeriesQuitRequiresCompletedShards(t *testing.T) {
 	})
 }
 
+func TestQueryRangeResponseIncludesStep(t *testing.T) {
+	start := uint64(1100 * time.Second)
+	end := uint64(1300 * time.Second)
+	step := uint64(30 * time.Second)
+
+	req := &tempopb.QueryRangeRequest{
+		Query: "{} | rate()",
+		Start: start,
+		End:   end,
+		Step:  step,
+	}
+
+	c, err := NewTypedQueryRange(req, 0)
+	require.NoError(t, err)
+
+	// GRPCFinal should include the step from the request
+	final, err := c.GRPCFinal()
+	require.NoError(t, err)
+	require.Equal(t, step, final.Step)
+
+	// GRPCDiff should also include the step from the request
+	diff, err := c.GRPCDiff()
+	require.NoError(t, err)
+	require.Equal(t, step, diff.Step)
+}
+
 func BenchmarkMarshalOnly(b *testing.B) {
 	_, curr := seriesWithTenPercentDiff()
 
