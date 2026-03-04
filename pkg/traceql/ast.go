@@ -34,9 +34,10 @@ type typedExpression interface {
 // single Expr. A math node (Op != OpNone) combines two sub-trees via a
 // binary arithmetic operator (+, -, *, /).
 type RootExpr struct {
-	Hints             *Hints
-	OptimizationCount int
-	Expr              Expr
+	Hints              *Hints
+	OptimizationCount  int
+	Expr               Expr
+	MetricsSecondStage secondStageElement
 }
 
 type Expr struct {

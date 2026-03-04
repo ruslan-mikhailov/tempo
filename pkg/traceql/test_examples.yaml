@@ -180,6 +180,8 @@ valid:
   - '{} | rate() != 0'
   - '{} | rate() > -3'
   - '{} | rate() by (span.client_ip) > 10 with(sample=0.1)'
+  - '({} | rate()) > 10'
+  - '({} | max_over_time(duration)) > 30'
   # second stage combined
   - '{} | rate() | topk(5) = 10'
   - '{} | rate() | topk(5) != 10'

@@ -996,6 +996,34 @@ var queryRangeTestCases = []struct {
 			},
 		},
 	},
+	{
+		name: "wrapped_max_over_time_gt_filter",
+		req:  requestWithDefaultRange("({ } | max_over_time(duration)) > 30"),
+		expectedL1: []*tempopb.TimeSeries{
+			{
+				Labels: []common_v1.KeyValue{
+					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
+				},
+				Samples: []tempopb.Sample{
+					{TimestampMs: 15_000, Value: 15},
+					{TimestampMs: 30_000, Value: 30},
+					{TimestampMs: 45_000, Value: 45},
+					{TimestampMs: 60_000, Value: 50},
+				},
+			},
+		},
+		expectedL2: nil,
+		expectedL3: []*tempopb.TimeSeries{
+			{
+				Labels: []common_v1.KeyValue{tempopb.MakeKeyValueString("__name__", "max_over_time")},
+				Samples: []tempopb.Sample{
+					{TimestampMs: 45_000, Value: 45},
+					{TimestampMs: 60_000, Value: 50},
+				},
+			},
+		},
+	},
 	// --- Non-standard range queries ---
 	{
 		name: "end<step",
