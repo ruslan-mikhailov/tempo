@@ -985,6 +985,10 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 		}
 	}
 
+	if expr.MetricsSecondStage != nil && mode == AggregateModeFinal {
+		expr.MetricsSecondStage.init(req)
+	}
+
 	return NewMetricsFrontendEvaluator(expr, subQueries, mode), nil
 }
 
@@ -1610,6 +1614,10 @@ func (m *metricsFrontendEvaluatorFinal) Results() SeriesSet {
 	out := make(SeriesSet, len(result))
 	for _, v := range result {
 		out[v.Labels.MapKey()] = v
+	}
+	// apply second stage on final results
+	if secondStage := m.metricsFrontendEvaluator.rootExpr.MetricsSecondStage; secondStage != nil {
+		out = secondStage.process(out)
 	}
 	return out
 }

@@ -29,6 +29,14 @@ func (e ExprLeaf) String() string {
 
 func (r RootExpr) String() string {
 	s := r.Expr.String()
+	if r.MetricsSecondStage != nil {
+		s = "(" + s + ")"
+		stage := r.MetricsSecondStage.String()
+		if len(stage) > 0 && stage[0] != ' ' && stage[0] != '|' {
+			s += " "
+		}
+		s += stage
+	}
 	if r.Hints != nil {
 		s += " " + r.Hints.String()
 	}

@@ -2278,6 +2278,28 @@ func TestMetricsFilter(t *testing.T) {
 			expectedStr: `{ true } | rate() > -2.5`,
 		},
 		{
+			in: `({ } | rate()) > 10`,
+			expected: &RootExpr{
+				Expr: Expr{Leaf: &ExprLeaf{
+					Pipeline:        newPipeline(newSpansetFilter(NewStaticBool(true))),
+					MetricsPipeline: newMetricsAggregate(metricsAggregateRate, nil),
+				}},
+				MetricsSecondStage: newMetricsFilter(OpGreater, 10),
+			},
+			expectedStr: `({ true } | rate()) > 10`,
+		},
+		{
+			in: `({ } | max_over_time(duration)) > 30`,
+			expected: &RootExpr{
+				Expr: Expr{Leaf: &ExprLeaf{
+					Pipeline:        newPipeline(newSpansetFilter(NewStaticBool(true))),
+					MetricsPipeline: newMetricsAggregateWithAttr(metricsAggregateMaxOverTime, NewIntrinsic(IntrinsicDuration), nil),
+				}},
+				MetricsSecondStage: newMetricsFilter(OpGreater, 30),
+			},
+			expectedStr: `({ true } | max_over_time(duration)) > 30`,
+		},
+		{
 			in: `{ } | rate() > 10 with(foo="bar")`,
 			expected: newRootExprWithMetricsTwoStage(
 				newPipeline(newSpansetFilter(NewStaticBool(true))),
