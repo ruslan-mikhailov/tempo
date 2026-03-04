@@ -134,6 +134,7 @@ root:
   | spansetPipeline PIPE metricsAggregation                               { yylex.(*lexer).expr = newRootExprWithMetrics($1, $3) }
   | spansetPipeline PIPE metricsAggregation metricsSecondStagePipeline    { yylex.(*lexer).expr = newRootExprWithMetricsTwoStage($1, $3, $4) }
   | metricsExpression                                                     { yylex.(*lexer).expr = $1 }
+  | metricsExpression metricsFilter                                       { $1.MetricsSecondStage = $2; yylex.(*lexer).expr = $1 }
   | root hints                                                            { yylex.(*lexer).expr.withHints($2) }
   ;
 
