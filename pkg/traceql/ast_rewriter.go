@@ -59,9 +59,10 @@ func (f *fieldExpressionRewriter) RewriteRoot(r *RootExpr) *RootExpr {
 	newExpr, rwCount := f.rewriteExpr(&r.Expr)
 
 	return &RootExpr{
-		Hints:             r.Hints,
-		OptimizationCount: r.OptimizationCount + rwCount,
-		Expr:              *newExpr,
+		Hints:              r.Hints,
+		OptimizationCount:  r.OptimizationCount + rwCount,
+		Expr:               *newExpr,
+		MetricsSecondStage: r.MetricsSecondStage,
 	}
 }
 

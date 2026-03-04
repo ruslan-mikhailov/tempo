@@ -60,7 +60,26 @@ func (e Expr) validate() error {
 }
 
 func (r RootExpr) validate() error {
-	return r.Expr.validate()
+	if err := r.Expr.validate(); err != nil {
+		return err
+	}
+
+	if r.MetricsSecondStage == nil {
+		return nil
+	}
+
+	if err := r.MetricsSecondStage.validate(); err != nil {
+		return err
+	}
+
+	// Keep compare() semantics consistent with leaf-level validation.
+	for _, leaf := range r.Expr.CollectLeaves() {
+		if _, ok := leaf.MetricsPipeline.(*MetricsCompare); ok {
+			return fmt.Errorf("`compare()` cannot be used with second stage functions")
+		}
+	}
+
+	return nil
 }
 
 func (p Pipeline) validate() error {
