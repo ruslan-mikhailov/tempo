@@ -392,6 +392,8 @@ func (b *BaselineAggregator) Combine(ss []*tempopb.TimeSeries) {
 				metaType = l.Value.GetStringValue()
 			case internalLabelError:
 				err = l.Value.GetStringValue()
+			case internalLabelQueryFragment:
+				continue
 			default:
 				a = l.Key
 				v = StaticFromAnyValue(l.Value)
