@@ -334,8 +334,8 @@ metricsAggregation:
 // Metrics Second Stage Functions
 // **********************
 metricsSecondStage:
-    TOPK OPEN_PARENS INTEGER CLOSE_PARENS                        { $$ = newTopKBottomK(OpTopK, $3) }
-    | BOTTOMK OPEN_PARENS INTEGER CLOSE_PARENS                   { $$ = newTopKBottomK(OpBottomK, $3) }
+    TOPK OPEN_PARENS INTEGER CLOSE_PARENS                        { $$ = newTopKBottomK(OpTopK, $3, " | ") }
+    | BOTTOMK OPEN_PARENS INTEGER CLOSE_PARENS                   { $$ = newTopKBottomK(OpBottomK, $3, " | ") }
   ;
 
 // **********************
@@ -351,22 +351,22 @@ metricsFilterOperation:
   ;
 
 metricsFilter:
-    metricsFilterOperation INTEGER       { $$ = newMetricsFilter($1, float64($2)) }
-  | metricsFilterOperation FLOAT         { $$ = newMetricsFilter($1, $2) }
-  | metricsFilterOperation DURATION      { $$ = newMetricsFilter($1, float64($2) / float64(time.Second)) }
-  | metricsFilterOperation SUB INTEGER   { $$ = newMetricsFilter($1, float64(-$3)) }
-  | metricsFilterOperation SUB FLOAT     { $$ = newMetricsFilter($1, -$3) }
-  | metricsFilterOperation SUB DURATION  { $$ = newMetricsFilter($1, float64(-$3) / float64(time.Second)) }
+    metricsFilterOperation INTEGER       { $$ = newMetricsFilter($1, float64($2), " ") }
+  | metricsFilterOperation FLOAT         { $$ = newMetricsFilter($1, $2, " ") }
+  | metricsFilterOperation DURATION      { $$ = newMetricsFilter($1, float64($2) / float64(time.Second), " ") }
+  | metricsFilterOperation SUB INTEGER   { $$ = newMetricsFilter($1, float64(-$3), " ") }
+  | metricsFilterOperation SUB FLOAT     { $$ = newMetricsFilter($1, -$3, " ") }
+  | metricsFilterOperation SUB DURATION  { $$ = newMetricsFilter($1, float64(-$3) / float64(time.Second), " ") }
   ;
 
 // **********************
 // Metrics Second Stage Pipeline (chains of second stage elements)
 // **********************
 metricsSecondStagePipeline:
-    PIPE metricsSecondStage                              { $$.Append($2, " | ") }
-  | metricsFilter                                        { $$.Append($1, " ") }
-  | metricsSecondStagePipeline PIPE metricsSecondStage   { $$ = $1; $$.Append($3, " | ") }
-  | metricsSecondStagePipeline metricsFilter             { $$ = $1; $$.Append($2, " ") }
+    PIPE metricsSecondStage                              { $$ = ChainedSecondStage{$2} }
+  | metricsFilter                                        { $$ = ChainedSecondStage{$1} }
+  | metricsSecondStagePipeline PIPE metricsSecondStage   { $$ = append($1, $3) }
+  | metricsSecondStagePipeline metricsFilter             { $$ = append($1, $2) }
   ;
 
 // **********************
