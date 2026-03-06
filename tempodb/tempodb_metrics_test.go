@@ -1151,7 +1151,7 @@ var queryRangeTestCases = []struct {
 		expectedL2: nil,
 		expectedL3: []*tempopb.TimeSeries{
 			{
-				Labels: []common_v1.KeyValue{tempopb.MakeKeyValueString("__name__", "max_over_time")},
+				Labels: []common_v1.KeyValue{tempopb.MakeKeyValueString("__name__", "(max_over_time + max_over_time)")},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 45_000, Value: 90},  // 45+45
 					{TimestampMs: 60_000, Value: 100}, // 50+50
@@ -1198,7 +1198,7 @@ var queryRangeTestCases = []struct {
 				// L3 applies rate+rate on the L2 accumulated value (2x), giving 4x single-source rate.
 				// This is 2x the plain "{ } | rate()" L3 result from two sources.
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__name__", "(rate + rate)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 4 * 1.0},
@@ -1243,7 +1243,7 @@ var queryRangeTestCases = []struct {
 		expectedL3: []*tempopb.TimeSeries{
 			{
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__name__", "(rate - rate)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -1313,7 +1313,7 @@ var queryRangeTestCases = []struct {
 			{
 				// Labels come from LHS (rate sub-expression)
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__name__", "(rate + count_over_time)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2*1.0 + 2*15},
@@ -1384,7 +1384,7 @@ var queryRangeTestCases = []struct {
 			{
 				// Labels come from LHS (count_over_time sub-expression)
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__name__", "(count_over_time - rate)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2*15 - 2*1.0},
@@ -1455,7 +1455,7 @@ var queryRangeTestCases = []struct {
 		expectedL3: []*tempopb.TimeSeries{
 			{
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__name__", "(rate + rate)"),
 				},
 				// rate + 0 = rate (same as plain {} | rate() L3 from two sources)
 				Samples: []tempopb.Sample{
@@ -1527,7 +1527,7 @@ var queryRangeTestCases = []struct {
 		expectedL3: []*tempopb.TimeSeries{
 			{
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__name__", "(rate * rate)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -1658,7 +1658,7 @@ var queryRangeTestCases = []struct {
 		expectedL3: []*tempopb.TimeSeries{
 			{
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__name__", "(rate - rate)"),
 				},
 				// rate - 0 = rate (same as plain {} | rate() L3 from two sources)
 				Samples: []tempopb.Sample{
@@ -1703,7 +1703,7 @@ var queryRangeTestCases = []struct {
 		expectedL3: []*tempopb.TimeSeries{
 			{
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__name__", "(max_over_time + max_over_time)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},  // 15 + 0 (15 not > 20, treated as 0)
@@ -1749,7 +1749,7 @@ var queryRangeTestCases = []struct {
 		expectedL3: []*tempopb.TimeSeries{
 			{
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__name__", "(max_over_time + max_over_time)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15}, // 15 + 0 = 15 < 100 ✓
@@ -1793,7 +1793,7 @@ var queryRangeTestCases = []struct {
 		expectedL3: []*tempopb.TimeSeries{
 			{
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__name__", "(max_over_time + max_over_time)"),
 				},
 				// NOTE: NaN + NaN is converted to 0+0=0 by applyArithmeticOp (NaN inputs become 0).
 				// This means t=15s appears with value 0 even though both sub-expressions were filtered out.
@@ -1973,7 +1973,7 @@ var queryRangeTestCases = []struct {
 		expectedL3: []*tempopb.TimeSeries{
 			{
 				Labels: []common_v1.KeyValue{
-					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__name__", "(count_over_time / count_over_time)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 16.0 / 30.0}, // 2*8 / 2*15
