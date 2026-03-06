@@ -1642,12 +1642,12 @@ yydefault:
 	case 128:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		{
-			yyVAL.metricsSecondStage = newTopKBottomK(OpTopK, yyDollar[3].staticInt)
+			yyVAL.metricsSecondStage = newTopKBottomK(OpTopK, yyDollar[3].staticInt, " | ")
 		}
 	case 129:
 		yyDollar = yyS[yypt-4 : yypt+1]
 		{
-			yyVAL.metricsSecondStage = newTopKBottomK(OpBottomK, yyDollar[3].staticInt)
+			yyVAL.metricsSecondStage = newTopKBottomK(OpBottomK, yyDollar[3].staticInt, " | ")
 		}
 	case 130:
 		yyDollar = yyS[yypt-1 : yypt+1]
@@ -1682,54 +1682,52 @@ yydefault:
 	case 136:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		{
-			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, float64(yyDollar[2].staticInt))
+			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, float64(yyDollar[2].staticInt), " ")
 		}
 	case 137:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		{
-			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, yyDollar[2].staticFloat)
+			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, yyDollar[2].staticFloat, " ")
 		}
 	case 138:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		{
-			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, float64(yyDollar[2].staticDuration)/float64(time.Second))
+			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, float64(yyDollar[2].staticDuration)/float64(time.Second), " ")
 		}
 	case 139:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		{
-			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, float64(-yyDollar[3].staticInt))
+			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, float64(-yyDollar[3].staticInt), " ")
 		}
 	case 140:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		{
-			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, -yyDollar[3].staticFloat)
+			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, -yyDollar[3].staticFloat, " ")
 		}
 	case 141:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		{
-			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, float64(-yyDollar[3].staticDuration)/float64(time.Second))
+			yyVAL.metricsSecondStage = newMetricsFilter(yyDollar[1].scalarFilterOperation, float64(-yyDollar[3].staticDuration)/float64(time.Second), " ")
 		}
 	case 142:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		{
-			yyVAL.metricsSecondStagePipeline.Append(yyDollar[2].metricsSecondStage, " | ")
+			yyVAL.metricsSecondStagePipeline = ChainedSecondStage{yyDollar[2].metricsSecondStage}
 		}
 	case 143:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		{
-			yyVAL.metricsSecondStagePipeline.Append(yyDollar[1].metricsSecondStage, " ")
+			yyVAL.metricsSecondStagePipeline = ChainedSecondStage{yyDollar[1].metricsSecondStage}
 		}
 	case 144:
 		yyDollar = yyS[yypt-3 : yypt+1]
 		{
-			yyVAL.metricsSecondStagePipeline = yyDollar[1].metricsSecondStagePipeline
-			yyVAL.metricsSecondStagePipeline.Append(yyDollar[3].metricsSecondStage, " | ")
+			yyVAL.metricsSecondStagePipeline = append(yyDollar[1].metricsSecondStagePipeline, yyDollar[3].metricsSecondStage)
 		}
 	case 145:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		{
-			yyVAL.metricsSecondStagePipeline = yyDollar[1].metricsSecondStagePipeline
-			yyVAL.metricsSecondStagePipeline.Append(yyDollar[2].metricsSecondStage, " ")
+			yyVAL.metricsSecondStagePipeline = append(yyDollar[1].metricsSecondStagePipeline, yyDollar[2].metricsSecondStage)
 		}
 	case 146:
 		yyDollar = yyS[yypt-3 : yypt+1]
