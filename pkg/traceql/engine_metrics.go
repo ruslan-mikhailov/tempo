@@ -1649,6 +1649,7 @@ func (m *metricsFrontendEvaluatorFinal) Results() SeriesSet {
 	defer m.mtx.Unlock()
 
 	fragments := make(map[string]SeriesSet, len(m.subQueries))
+	fragmentNames := make(map[string]string, len(m.subQueries))
 	for k, q := range m.subQueries {
 		results := m.processSubQuery(q)
 		fragment := make(SeriesSet, len(results))
@@ -1664,6 +1665,10 @@ func (m *metricsFrontendEvaluatorFinal) Results() SeriesSet {
 				j++
 			}
 			for _, l := range v.Labels {
+				if l.Name == labels.MetricName {
+					fragmentNames[k] = l.Value.EncodeToString(false)
+					continue
+				}
 				if l.Name != internalLabelQueryFragment {
 					stripped = append(stripped, l)
 				}
@@ -1675,9 +1680,15 @@ func (m *metricsFrontendEvaluatorFinal) Results() SeriesSet {
 	}
 
 	result := evaluateMathExpr(&m.rootExpr.Expr, fragments)
+
+	combinedName := buildMetricName(&m.rootExpr.Expr, fragmentNames)
+
 	// Re-key by full labels so the output SeriesSet is consistent.
 	out := make(SeriesSet, len(result))
 	for _, v := range result {
+		if combinedName != "" {
+			v.Labels = append(Labels{Label{Name: labels.MetricName, Value: NewStaticString(combinedName)}}, v.Labels...)
+		}
 		out[v.Labels.MapKey()] = v
 	}
 	// apply second stage on final results
@@ -1694,6 +1705,20 @@ func evaluateMathExpr(e *Expr, fragments map[string]SeriesSet) SeriesSet {
 	lhs := evaluateMathExpr(e.LHS, fragments)
 	rhs := evaluateMathExpr(e.RHS, fragments)
 	return applyBinaryOp(e.Op, lhs, rhs)
+}
+
+// buildMetricName constructs a combined __name__ from the expression tree.
+// Returns "" if any leaf has no __name__ (e.g. grouped aggregator).
+func buildMetricName(e *Expr, names map[string]string) string {
+	if e.IsLeaf() {
+		return names[e.Leaf.String()]
+	}
+	lhs := buildMetricName(e.LHS, names)
+	rhs := buildMetricName(e.RHS, names)
+	if lhs == "" || rhs == "" {
+		return ""
+	}
+	return lhs + " " + e.Op.String() + " " + rhs
 }
 
 func applyBinaryOp(op Operator, lhs, rhs SeriesSet) SeriesSet {
