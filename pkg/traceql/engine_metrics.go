@@ -987,6 +987,8 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 
 	if expr.MetricsSecondStage != nil && mode == AggregateModeFinal {
 		expr.MetricsSecondStage.init(req)
+	} else {
+		expr.MetricsSecondStage = nil // set explicitly
 	}
 
 	return NewMetricsFrontendEvaluator(expr, subQueries, mode), nil
@@ -1104,6 +1106,11 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		bme[q.query] = me
 	}
 
+	if !expr.HasMathOperation() { // single, non-batched query
+		for k := range bme {
+			return bme[k], nil
+		}
+	}
 	return bme, nil
 }
 
@@ -1606,6 +1613,26 @@ type MetricsFrontendEvaluator interface {
 }
 
 func NewMetricsFrontendEvaluator(rootExpr *RootExpr, subQueries []subQuery, mode AggregateMode) MetricsFrontendEvaluator {
+	if !rootExpr.HasMathOperation() {
+		mfe := &singleMetricsFrontendEvaluator{
+			mtx:             sync.Mutex{},
+			metricsPipeline: subQueries[0].metricsPipeline,
+		}
+		if mode == AggregateModeFinal {
+			var secondStage ChainedSecondStage
+			if ss := rootExpr.MetricsSecondStage; ss != nil {
+				secondStage = append(secondStage, ss)
+			}
+			if ss := subQueries[0].secondStage; ss != nil {
+				secondStage = append(secondStage, ss)
+			}
+			if len(secondStage) != 0 {
+				mfe.metricsSecondStage = secondStage
+			}
+		}
+		return mfe
+	}
+
 	subQieriesM := make(map[string]subQuery, len(subQueries))
 	for _, q := range subQueries {
 		subQieriesM[q.query] = q
@@ -1624,6 +1651,44 @@ func NewMetricsFrontendEvaluator(rootExpr *RootExpr, subQueries []subQuery, mode
 	default:
 		panic("unexpected mode") // should never happen
 	}
+}
+
+// singleMetricsFrontendEvaluator is used when there is only a single sub-query, so we can skip the fragmenting logic
+type singleMetricsFrontendEvaluator struct {
+	mtx                sync.Mutex
+	metricsPipeline    firstStageElement
+	metricsSecondStage secondStageElement
+}
+
+func (m *singleMetricsFrontendEvaluator) ObserveSeries(in []*tempopb.TimeSeries) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
+	m.metricsPipeline.observeSeries(in)
+}
+
+func (m *singleMetricsFrontendEvaluator) Results() SeriesSet {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
+	// Job results are not scaled by sampling, but this is here for the interface.
+	results := m.metricsPipeline.result(1.0)
+
+	if m.metricsSecondStage != nil {
+		// metrics second stage is only set when query has second stage function and mode = final
+		// if we have metrics second stage, pass first stage results through
+		// second stage for further processing.
+		results = m.metricsSecondStage.process(results)
+	}
+
+	return results
+}
+
+func (m *singleMetricsFrontendEvaluator) Length() int {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+
+	return m.metricsPipeline.length()
 }
 
 type metricsFrontendEvaluatorFinal struct {

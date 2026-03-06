@@ -40,6 +40,11 @@ type RootExpr struct {
 	MetricsSecondStage secondStageElement
 }
 
+func (e *RootExpr) HasMathOperation() bool {
+	// if first expression is already a leaf, then there are no math operations
+	return e != nil && !e.Expr.IsLeaf()
+}
+
 type Expr struct {
 	Leaf *ExprLeaf
 	Op   Operator
