@@ -1752,12 +1752,13 @@ func evaluateMathExpr(e *Expr, fragments map[string]SeriesSet) SeriesSet {
 
 func applyBinaryOp(op Operator, lhs, rhs SeriesSet) SeriesSet {
 	result := make(SeriesSet)
+	noLabels := SeriesMapKey{}
 	for k, l := range lhs {
-		r, ok := rhs[k]
-		if !ok {
-			continue
+		if r, ok := rhs[noLabels]; ok { // if fan-out, e.g. {} | rate()
+			result[k] = applyTimeSeries(op, l, r, l.Labels)
+		} else if r, ok := rhs[k]; ok { // if match by labels, e.g. {} | rate() by (x)
+			result[k] = applyTimeSeries(op, l, r, l.Labels)
 		}
-		result[k] = applyTimeSeries(op, l, r, l.Labels)
 	}
 	return result
 }
