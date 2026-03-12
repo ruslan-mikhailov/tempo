@@ -1605,6 +1605,12 @@ func BenchmarkBackendBlockQueryRange(b *testing.B) {
 		"{ name != nil } | compare({status=error})",
 		"{} > {} | rate() by (name)", // structural
 
+		// Math operations
+		"({} | rate()) + ({} | rate())",
+		"({} | rate()) - ({} | rate())",
+		"({} | rate()) * ({} | rate())",
+		"({} | rate()) / ({} | count_over_time())",
+
 		// This is useful for sampler debugging
 		// {} | rate() with(sample=true,debug=true,info=true)
 	}
@@ -1678,6 +1684,9 @@ func TestSamplingError(t *testing.T) {
 		"{nestedSetParent<0 && true} | histogram_over_time(duration)",
 		`{nestedSetParent<0 && resource.service.name="gme-alertmanager" && resource.service.namespace != nil} | rate() by(resource.service.namespace)`,
 		"{true && true && resource.service.name != nil} | rate() by(resource.service.name)",*/
+
+		// Math operations
+		"({} | rate()) + ({} | rate())",
 	}
 
 	options := []string{
