@@ -3766,3 +3766,89 @@ func TestLog2QuantileWithBucket(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyTimeSeriesExemplars(t *testing.T) {
+	tests := []struct {
+		name     string
+		lhs      TimeSeries
+		rhs      TimeSeries
+		wantExem int
+	}{
+		{
+			name: "both have exemplars",
+			lhs: TimeSeries{
+				Values:    []float64{1, 2},
+				Exemplars: []Exemplar{{Labels: Labels{{Name: "a"}}, Value: 1, TimestampMs: 100}},
+			},
+			rhs: TimeSeries{
+				Values:    []float64{3, 4},
+				Exemplars: []Exemplar{{Labels: Labels{{Name: "b"}}, Value: 2, TimestampMs: 200}},
+			},
+			wantExem: 2,
+		},
+		{
+			name: "only lhs has exemplars",
+			lhs: TimeSeries{
+				Values:    []float64{1, 2},
+				Exemplars: []Exemplar{{Labels: Labels{{Name: "a"}}, Value: 1, TimestampMs: 100}},
+			},
+			rhs: TimeSeries{
+				Values: []float64{3, 4},
+			},
+			wantExem: 1,
+		},
+		{
+			name: "only rhs has exemplars",
+			lhs: TimeSeries{
+				Values: []float64{1, 2},
+			},
+			rhs: TimeSeries{
+				Values:    []float64{3, 4},
+				Exemplars: []Exemplar{{Labels: Labels{{Name: "b"}}, Value: 2, TimestampMs: 200}},
+			},
+			wantExem: 1,
+		},
+		{
+			name: "neither has exemplars",
+			lhs: TimeSeries{
+				Values: []float64{1, 2},
+			},
+			rhs: TimeSeries{
+				Values: []float64{3, 4},
+			},
+			wantExem: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := applyTimeSeries(OpAdd, tt.lhs, tt.rhs, Labels{})
+			require.Len(t, result.Exemplars, tt.wantExem)
+			// Values should still be computed correctly
+			require.Equal(t, []float64{4, 6}, result.Values)
+		})
+	}
+}
+
+func TestMergeExemplars(t *testing.T) {
+	e1 := Exemplar{Labels: Labels{{Name: "a"}}, Value: 1, TimestampMs: 100}
+	e2 := Exemplar{Labels: Labels{{Name: "b"}}, Value: 2, TimestampMs: 200}
+
+	tests := []struct {
+		name string
+		a, b []Exemplar
+		want []Exemplar
+	}{
+		{"both nil", nil, nil, nil},
+		{"a nil", nil, []Exemplar{e2}, []Exemplar{e2}},
+		{"b nil", []Exemplar{e1}, nil, []Exemplar{e1}},
+		{"both present", []Exemplar{e1}, []Exemplar{e2}, []Exemplar{e1, e2}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeExemplars(tt.a, tt.b)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
