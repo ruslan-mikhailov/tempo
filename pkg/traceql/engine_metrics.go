@@ -1862,7 +1862,20 @@ func applyTimeSeries(op Operator, lhs, rhs TimeSeries, labels Labels) TimeSeries
 	for i := 0; i < n; i++ {
 		values[i] = applyArithmeticOp(op, lhs.Values[i], rhs.Values[i])
 	}
-	return TimeSeries{Labels: labels, Values: values}
+	return TimeSeries{Labels: labels, Values: values, Exemplars: mergeExemplars(lhs.Exemplars, rhs.Exemplars)}
+}
+
+func mergeExemplars(a, b []Exemplar) []Exemplar {
+	if len(a) == 0 {
+		return b
+	}
+	if len(b) == 0 {
+		return a
+	}
+	result := make([]Exemplar, 0, len(a)+len(b))
+	result = append(result, a...)
+	result = append(result, b...)
+	return result
 }
 
 func applyArithmeticOp(op Operator, lhs, rhs float64) float64 {
