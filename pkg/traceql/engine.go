@@ -36,18 +36,18 @@ func Compile(query string) (*RootExpr, SpansetFilterFunc, firstStageElement, sec
 	if len(subQueries) != 1 {
 		return nil, nil, nil, nil, nil, errors.New("query is not supported")
 	}
-	return expr, subQueries[0].eval, subQueries[0].metricsPipeline, subQueries[0].secondStage, subQueries[0].req, nil
+	return expr, subQueries[0].eval, subQueries[0].metricsPipeline, subQueries[0].secondStage, subQueries[0].Req, nil
 }
 
-type subQuery struct {
-	query           string
+type SubQuery struct {
+	Query           string
+	Req             *FetchSpansRequest
 	eval            SpansetFilterFunc
 	metricsPipeline firstStageElement
 	secondStage     secondStageElement
-	req             *FetchSpansRequest
 }
 
-func CompileSubQueries(query string) (*RootExpr, []subQuery, error) {
+func CompileSubQueries(query string) (*RootExpr, []SubQuery, error) {
 	expr, err := Parse(query)
 	if err != nil {
 		return nil, nil, err
@@ -59,18 +59,18 @@ func CompileSubQueries(query string) (*RootExpr, []subQuery, error) {
 	}
 
 	leaves := expr.Expr.CollectLeaves()
-	subQueries := make([]subQuery, 0, len(leaves))
+	subQueries := make([]SubQuery, 0, len(leaves))
 	for _, leaf := range leaves {
 		req := &FetchSpansRequest{
 			AllConditions: true,
 		}
 		leaf.extractConditions(req)
-		subQueries = append(subQueries, subQuery{
-			query:           leaf.String(),
+		subQueries = append(subQueries, SubQuery{
+			Query:           leaf.String(),
 			eval:            leaf.Pipeline.evaluate,
 			metricsPipeline: leaf.MetricsPipeline,
 			secondStage:     leaf.MetricsSecondStage,
-			req:             req,
+			Req:             req,
 		})
 	}
 	return expr, subQueries, nil

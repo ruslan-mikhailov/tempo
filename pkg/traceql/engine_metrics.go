@@ -1028,10 +1028,10 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		}
 		// This initializes all step buffers, counters, etc
 		q.metricsPipeline.init(req, AggregateModeRaw)
-		e.applySampleHints(expr, q.req, allowUnsafeQueryHints)
+		e.applySampleHints(expr, q.Req, allowUnsafeQueryHints)
 
 		me := &metricsEvaluator{
-			storageReq:        q.req,
+			storageReq:        q.Req,
 			metricsPipeline:   q.metricsPipeline,
 			timeOverlapCutoff: timeOverlapCutoff,
 			maxExemplars:      int(req.Exemplars),
@@ -1054,15 +1054,15 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		}
 
 		// Span start time (always required)
-		if !q.req.HasAttribute(IntrinsicSpanStartTimeAttribute) {
+		if !q.Req.HasAttribute(IntrinsicSpanStartTimeAttribute) {
 			// Technically we only need the start time of matching spans, so we add it to the second pass.
 			// However this is often optimized back to the first pass when it lets us avoid a second pass altogether.
-			q.req.SecondPassConditions = append(q.req.SecondPassConditions, Condition{Attribute: IntrinsicSpanStartTimeAttribute, Precision: precision})
+			q.Req.SecondPassConditions = append(q.Req.SecondPassConditions, Condition{Attribute: IntrinsicSpanStartTimeAttribute, Precision: precision})
 		} else {
 			// Update the existing condition to use low precision
-			for i, c := range q.req.Conditions {
+			for i, c := range q.Req.Conditions {
 				if c.Attribute == IntrinsicSpanStartTimeAttribute {
-					q.req.Conditions[i].Precision = precision
+					q.Req.Conditions[i].Precision = precision
 					break
 				}
 			}
@@ -1087,12 +1087,12 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 
 		if me.maxExemplars > 0 {
 			cb := func() bool { return me.exemplarCount < me.maxExemplars }
-			meta := ExemplarMetaConditionsWithout(cb, q.req.SecondPassConditions, q.req.AllConditions)
-			q.req.SecondPassConditions = append(q.req.SecondPassConditions, meta...)
+			meta := ExemplarMetaConditionsWithout(cb, q.Req.SecondPassConditions, q.Req.AllConditions)
+			q.Req.SecondPassConditions = append(q.Req.SecondPassConditions, meta...)
 		}
 		// Setup second pass callback.  It might be optimized away
 		ssBuf := make([]*Spanset, 1)
-		q.req.SecondPass = func(s *Spanset) ([]*Spanset, error) {
+		q.Req.SecondPass = func(s *Spanset) ([]*Spanset, error) {
 			// The traceql engine isn't thread-safe.
 			// But parallelization is required for good metrics performance.
 			// So we do external locking here.
@@ -1102,8 +1102,8 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 			return q.eval(ssBuf)
 		}
 
-		optimize(q.req)
-		bme[q.query] = me
+		optimize(q.Req)
+		bme[q.Query] = me
 	}
 
 	if !expr.HasMathOperation() { // single, non-batched query
@@ -1612,7 +1612,7 @@ type MetricsFrontendEvaluator interface {
 	Length() int
 }
 
-func NewMetricsFrontendEvaluator(rootExpr *RootExpr, subQueries []subQuery, mode AggregateMode) MetricsFrontendEvaluator {
+func NewMetricsFrontendEvaluator(rootExpr *RootExpr, subQueries []SubQuery, mode AggregateMode) MetricsFrontendEvaluator {
 	if !rootExpr.HasMathOperation() {
 		mfe := &singleMetricsFrontendEvaluator{
 			mtx:             sync.Mutex{},
@@ -1633,9 +1633,9 @@ func NewMetricsFrontendEvaluator(rootExpr *RootExpr, subQueries []subQuery, mode
 		return mfe
 	}
 
-	subQieriesM := make(map[string]subQuery, len(subQueries))
+	subQueriesM := make(map[string]SubQuery, len(subQueries))
 	for _, q := range subQueries {
-		subQieriesM[q.query] = q
+		subQueriesM[q.Query] = q
 	}
 
 	mfe := &metricsFrontendEvaluator{
@@ -1702,7 +1702,7 @@ type metricsFrontendEvaluatorSum struct {
 type metricsFrontendEvaluator struct {
 	rootExpr   *RootExpr
 	mtx        sync.Mutex
-	subQueries map[string]subQuery
+	subQueries map[string]SubQuery
 }
 
 func (m *metricsFrontendEvaluator) ObserveSeries(in []*tempopb.TimeSeries) {
@@ -1737,7 +1737,7 @@ func (m *metricsFrontendEvaluator) Length() int {
 	return length
 }
 
-func (m *metricsFrontendEvaluator) processSubQuery(q subQuery) SeriesSet {
+func (m *metricsFrontendEvaluator) processSubQuery(q SubQuery) SeriesSet {
 	// Job results are not scaled by sampling, but this is here for the interface.
 	results := q.metricsPipeline.result(1.0)
 

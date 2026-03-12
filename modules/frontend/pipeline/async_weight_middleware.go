@@ -103,40 +103,42 @@ func (c weightRequestWare) setTraceQLWeight(req Request) {
 		return
 	}
 
-	rootExpr, _, _, _, spanRequest, err := traceql.Compile(traceQLQuery)
-	if err != nil || spanRequest == nil {
+	rootExpr, subQueries, err := traceql.CompileSubQueries(traceQLQuery)
+	if err != nil || len(subQueries) == 0 {
 		return
 	}
 
-	conditions := 0
-	regexConditions := 0
+	for _, q := range subQueries {
+		conditions := 0
+		regexConditions := 0
 
-	for _, c := range spanRequest.Conditions {
-		if c.Op != traceql.OpNone {
-			conditions++
+		for _, cond := range q.Req.Conditions {
+			if cond.Op != traceql.OpNone {
+				conditions++
+			}
+			if cond.Op == traceql.OpRegex || cond.Op == traceql.OpNotRegex {
+				regexConditions++
+			}
 		}
-		if c.Op == traceql.OpRegex || c.Op == traceql.OpNotRegex {
-			regexConditions++
+		complexQuery := regexConditions >= c.weights.MaxRegexConditions || conditions >= c.weights.MaxTraceQLConditions
+		if complexQuery {
+			weight++
+		}
+
+		// Queries with OR operations (AllConditions=false) are more expensive
+		// because they can't be optimized in the storage layer
+		if !q.Req.AllConditions {
+			weight++
+		}
+
+		// SecondPassSelectAll means selecting all attributes instead of specific ones
+		if q.Req.SecondPassSelectAll {
+			weight++
 		}
 	}
-	complexQuery := regexConditions >= c.weights.MaxRegexConditions || conditions >= c.weights.MaxTraceQLConditions
-	if complexQuery {
-		weight++
-	}
 
-	// Queries with OR operations (AllConditions=false) are more expensive
-	// because they can't be optimized in the storage layer
-	if !spanRequest.AllConditions {
-		weight++
-	}
-
-	// Query that requere full trace scanning, e.g. with structural operators
+	// Query that requires full trace scanning, e.g. with structural operators
 	if rootExpr != nil && rootExpr.NeedsFullTrace() {
-		weight++
-	}
-
-	// SecondPassSelectAll means selecting all attributes instead of specific ones
-	if spanRequest.SecondPassSelectAll {
 		weight++
 	}
 
