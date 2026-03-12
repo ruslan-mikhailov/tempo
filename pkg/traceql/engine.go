@@ -27,12 +27,12 @@ func NewEngine() *Engine {
 	return &Engine{}
 }
 
+// Compile compiles given query. It does not support sub-queries
 func Compile(query string) (*RootExpr, SpansetFilterFunc, firstStageElement, secondStageElement, *FetchSpansRequest, error) {
 	expr, subQueries, err := CompileSubQueries(query)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	// TODO: this if is temporary and should be removed later
 	if len(subQueries) != 1 {
 		return nil, nil, nil, nil, nil, errors.New("query is not supported")
 	}
