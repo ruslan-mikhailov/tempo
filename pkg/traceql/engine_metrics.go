@@ -1722,7 +1722,7 @@ func buildMetricName(e *Expr, names map[string]string) string {
 }
 
 func applyBinaryOp(op Operator, lhs, rhs SeriesSet) SeriesSet {
-	result := make(SeriesSet)
+	result := make(SeriesSet, len(lhs))
 	noLabels := SeriesMapKey{}
 	for k, l := range lhs {
 		if r, ok := rhs[noLabels]; ok { // if fan-out, e.g. {} | rate()
