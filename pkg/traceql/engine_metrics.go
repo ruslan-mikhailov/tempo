@@ -353,6 +353,8 @@ type SeriesMapLabel struct {
 
 type SeriesMapKey [maxGroupBys]SeriesMapLabel
 
+var noLabelsSeriesMapKey = SeriesMapKey{}
+
 // SeriesSet is a set of unique timeseries. They are mapped by the "Prometheus"-style
 // text description: {x="a",y="b"} for convenience.
 type SeriesSet map[SeriesMapKey]TimeSeries
@@ -1841,28 +1843,56 @@ func buildMetricName(e *Expr, names map[string]string) string {
 }
 
 func applyBinaryOp(op Operator, lhs, rhs SeriesSet) SeriesSet {
-	result := make(SeriesSet, len(lhs))
-	noLabels := SeriesMapKey{}
-	for k, l := range lhs {
-		if r, ok := rhs[noLabels]; ok { // if fan-out, e.g. {} | rate()
-			result[k] = applyTimeSeries(op, l, r, l.Labels)
-		} else if r, ok := rhs[k]; ok { // if match by labels, e.g. {} | rate() by (x)
-			result[k] = applyTimeSeries(op, l, r, l.Labels)
+	target := lhs
+	if _, ok := rhs[noLabelsSeriesMapKey]; !ok {
+		target = rhs
+	}
+
+	result := make(SeriesSet, len(target))
+
+	// pre-allocate array once to avoid multiple smaller allocations
+	var valuesLen int
+	for _, t := range target {
+		valuesLen += len(t.Values)
+	}
+	buf := make([]float64, valuesLen)
+	var offset int
+
+	for k := range target {
+		l, lOk := getTSMatch(lhs, k)
+		r, rOk := getTSMatch(rhs, k)
+		if !lOk || !rOk {
+			continue
 		}
+
+		n := min(len(r.Values), len(l.Values))
+		values := buf[offset : offset+n]
+		for j := 0; j < n; j++ {
+			values[j] = applyArithmeticOp(op, l.Values[j], r.Values[j])
+		}
+		labels := l.Labels
+		if len(labels) == 0 {
+			labels = r.Labels
+		}
+
+		result[k] = TimeSeries{
+			Labels:    labels,
+			Values:    values,
+			Exemplars: mergeExemplars(l.Exemplars, r.Exemplars),
+		}
+		offset += n
 	}
 	return result
 }
 
-func applyTimeSeries(op Operator, lhs, rhs TimeSeries, labels Labels) TimeSeries {
-	n := len(lhs.Values)
-	if len(rhs.Values) < n {
-		n = len(rhs.Values)
+func getTSMatch(set SeriesSet, key SeriesMapKey) (TimeSeries, bool) {
+	if s, ok := set[key]; ok {
+		return s, true
 	}
-	values := make([]float64, n)
-	for i := 0; i < n; i++ {
-		values[i] = applyArithmeticOp(op, lhs.Values[i], rhs.Values[i])
+	if s, ok := set[noLabelsSeriesMapKey]; ok {
+		return s, true
 	}
-	return TimeSeries{Labels: labels, Values: values, Exemplars: mergeExemplars(lhs.Exemplars, rhs.Exemplars)}
+	return TimeSeries{}, false
 }
 
 func mergeExemplars(a, b []Exemplar) []Exemplar {
