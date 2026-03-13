@@ -1724,12 +1724,31 @@ func buildMetricName(e *Expr, names map[string]string) string {
 func applyBinaryOp(op Operator, lhs, rhs SeriesSet) SeriesSet {
 	result := make(SeriesSet, len(lhs))
 	noLabels := SeriesMapKey{}
+
+	// pre-allocate array once to avoid multiple smaller allocations
+	var valuesLen int
+	for _, l := range lhs {
+		valuesLen += len(l.Values)
+	}
+	buf := make([]float64, valuesLen)
+	var offset int
+
 	for k, l := range lhs {
-		if r, ok := rhs[noLabels]; ok { // if fan-out, e.g. {} | rate()
-			result[k] = applyTimeSeries(op, l, r, l.Labels)
-		} else if r, ok := rhs[k]; ok { // if match by labels, e.g. {} | rate() by (x)
-			result[k] = applyTimeSeries(op, l, r, l.Labels)
+		var r TimeSeries
+		var ok bool
+		if r, ok = rhs[noLabels]; !ok {
+			r, ok = rhs[k]
 		}
+		if !ok {
+			continue
+		}
+		n := len(r.Values)
+		values := buf[offset : offset+n]
+		for j := 0; j < n; j++ {
+			values[j] = applyArithmeticOp(op, l.Values[j], r.Values[j])
+		}
+		result[k] = TimeSeries{Labels: l.Labels, Values: values, Exemplars: mergeExemplars(l.Exemplars, r.Exemplars)}
+		offset += n
 	}
 	return result
 }
