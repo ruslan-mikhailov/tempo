@@ -1868,9 +1868,11 @@ func (b *SimpleAggregator) Combine(in []*tempopb.TimeSeries) {
 			}
 		}
 
+		prevLen := len(existing.Exemplars)
 		b.aggregateExemplars(ts, &existing)
-
-		b.ss[key] = existing
+		if len(existing.Exemplars) != prevLen {
+			b.ss[key] = existing
+		}
 	}
 }
 
