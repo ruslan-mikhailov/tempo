@@ -1756,7 +1756,11 @@ func (m *metricsFrontendEvaluatorSum) Results() SeriesSet {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
-	result := make(SeriesSet, len(m.subQueries))
+	total := 0
+	for _, q := range m.subQueries {
+		total += q.metricsPipeline.length()
+	}
+	result := make(SeriesSet, total)
 	for _, q := range m.subQueries {
 		for k, v := range m.processSubQuery(q) {
 			result[k] = v
