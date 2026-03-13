@@ -1660,7 +1660,6 @@ func (m *metricsFrontendEvaluatorFinal) Results() SeriesSet {
 		for smk, v := range results {
 			key := SeriesMapKey{}
 			j := 0
-			stripped := make(Labels, 0, len(v.Labels))
 			for i := range smk {
 				if smk[i].Name == labels.MetricName || smk[i].Name == internalLabelQueryFragment {
 					continue
@@ -1668,16 +1667,18 @@ func (m *metricsFrontendEvaluatorFinal) Results() SeriesSet {
 				key[j] = smk[i]
 				j++
 			}
+			n := 0
 			for _, l := range v.Labels {
 				if l.Name == labels.MetricName {
 					fragmentNames[k] = l.Value.EncodeToString(false)
 					continue
 				}
 				if l.Name != internalLabelQueryFragment {
-					stripped = append(stripped, l)
+					v.Labels[n] = l // to avoid reallocation we reuse the slice
+					n++
 				}
 			}
-			v.Labels = stripped
+			v.Labels = v.Labels[:n]
 			fragment[key] = v
 		}
 		fragments[k] = fragment
