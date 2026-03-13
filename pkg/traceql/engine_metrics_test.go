@@ -3830,6 +3830,145 @@ func TestApplyTimeSeriesExemplars(t *testing.T) {
 	}
 }
 
+func BenchmarkMetricsFrontendEvaluator(b *testing.B) {
+	start := uint64(time.Now().Add(-1 * time.Hour).UnixNano())
+	end := uint64(time.Now().UnixNano())
+	step := uint64(15 * time.Second.Nanoseconds())
+
+	singleQuery := "{ } | count_over_time() by (span.foo)"
+	mathQuery := "({} | rate()) / ({} | count_over_time())"
+
+	seriesCounts := []int{10, 100, 1000}
+
+	const samplesPerSeries = 240
+	const exemplarsPerSeries = 5
+
+	newReq := func(query string) *tempopb.QueryRangeRequest {
+		return &tempopb.QueryRangeRequest{
+			Start: start,
+			End:   end,
+			Step:  step,
+			Query: query,
+		}
+	}
+
+	compileSingle := func(b *testing.B, mode AggregateMode) MetricsFrontendEvaluator {
+		b.Helper()
+		e := NewEngine()
+		eval, err := e.CompileMetricsQueryRangeNonRaw(newReq(singleQuery), mode)
+		require.NoError(b, err)
+		return eval
+	}
+
+	compileMath := func(b *testing.B, mode AggregateMode) MetricsFrontendEvaluator {
+		b.Helper()
+		e := NewEngine()
+		eval, err := e.CompileMetricsQueryRangeNonRaw(newReq(mathQuery), mode)
+		require.NoError(b, err)
+		return eval
+	}
+
+	mathFragmentKeys := func(b *testing.B) []string {
+		b.Helper()
+		_, subQueries, err := CompileSubQueries(mathQuery)
+		require.NoError(b, err)
+		keys := make([]string, len(subQueries))
+		for i, q := range subQueries {
+			keys[i] = q.Query
+		}
+		return keys
+	}
+
+	generateMathTimeSeries := func(b *testing.B, seriesCount int) []*tempopb.TimeSeries {
+		b.Helper()
+		keys := mathFragmentKeys(b)
+		perFragment := generateTestTimeSeries(seriesCount, samplesPerSeries, exemplarsPerSeries, start, end)
+		all := make([]*tempopb.TimeSeries, 0, len(perFragment)*len(keys))
+		for _, key := range keys {
+			for _, ts := range perFragment {
+				tagged := &tempopb.TimeSeries{
+					Samples:   ts.Samples,
+					Exemplars: ts.Exemplars,
+					Labels: append([]commonv1proto.KeyValue{{
+						Key: internalLabelQueryFragment,
+						Value: &commonv1proto.AnyValue{
+							Value: &commonv1proto.AnyValue_StringValue{StringValue: key},
+						},
+					}}, ts.Labels...),
+				}
+				all = append(all, tagged)
+			}
+		}
+		return all
+	}
+
+	b.Run("single", func(b *testing.B) {
+		for _, sc := range seriesCounts {
+			data := generateTestTimeSeries(sc, samplesPerSeries, exemplarsPerSeries, start, end)
+
+			b.Run(fmt.Sprintf("series_%d/ObserveSeries", sc), func(b *testing.B) {
+				for b.Loop() {
+					eval := compileSingle(b, AggregateModeSum)
+					eval.ObserveSeries(data)
+				}
+			})
+
+			b.Run(fmt.Sprintf("series_%d/Results", sc), func(b *testing.B) {
+				eval := compileSingle(b, AggregateModeSum)
+				eval.ObserveSeries(data)
+				b.ResetTimer()
+				for b.Loop() {
+					_ = eval.Results()
+				}
+			})
+		}
+	})
+
+	b.Run("sum", func(b *testing.B) {
+		for _, sc := range seriesCounts {
+			data := generateMathTimeSeries(b, sc)
+
+			b.Run(fmt.Sprintf("series_%d/ObserveSeries", sc), func(b *testing.B) {
+				for b.Loop() {
+					eval := compileMath(b, AggregateModeSum)
+					eval.ObserveSeries(data)
+				}
+			})
+
+			b.Run(fmt.Sprintf("series_%d/Results", sc), func(b *testing.B) {
+				eval := compileMath(b, AggregateModeSum)
+				eval.ObserveSeries(data)
+				b.ResetTimer()
+				for b.Loop() {
+					_ = eval.Results()
+				}
+			})
+		}
+	})
+
+	b.Run("final", func(b *testing.B) {
+		for _, sc := range seriesCounts {
+			data := generateMathTimeSeries(b, sc)
+
+			b.Run(fmt.Sprintf("series_%d/ObserveSeries", sc), func(b *testing.B) {
+				for b.Loop() {
+					eval := compileMath(b, AggregateModeFinal)
+					eval.ObserveSeries(data)
+				}
+			})
+
+			b.Run(fmt.Sprintf("series_%d/Results", sc), func(b *testing.B) {
+				eval := compileMath(b, AggregateModeFinal)
+				eval.ObserveSeries(data)
+				b.ResetTimer()
+				for b.Loop() {
+					_ = eval.Results()
+				}
+			})
+		}
+	})
+}
+
 func TestMergeExemplars(t *testing.T) {
 	e1 := Exemplar{Labels: Labels{{Name: "a"}}, Value: 1, TimestampMs: 100}
 	e2 := Exemplar{Labels: Labels{{Name: "b"}}, Value: 2, TimestampMs: 200}
