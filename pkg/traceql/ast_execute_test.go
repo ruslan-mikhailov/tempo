@@ -35,7 +35,9 @@ func testEvaluator(t *testing.T, tc evalTC) {
 				cloneIn[i].Spans = append([]Span(nil), tc.input[i].Spans...)
 			}
 
-			actual, err := ast.Expr.Leaf.Pipeline.evaluate(tc.input)
+			leaf, ok := ast.SingleExpression()
+			require.True(t, ok)
+			actual, err := leaf.Pipeline.evaluate(tc.input)
 			require.NoError(t, err)
 
 			// sort expected/actual spansets. grouping requires this b/c map iteration makes the output
@@ -1259,7 +1261,9 @@ func TestSpansetOperationEvaluateArrayUnsupported(t *testing.T) {
 				cloneIn[i].Spans = append([]Span(nil), tc.input[i].Spans...)
 			}
 
-			_, err = ast.Expr.Leaf.Pipeline.evaluate(tc.input)
+			leaf, ok := ast.SingleExpression()
+			require.True(t, ok)
+			_, err = leaf.Pipeline.evaluate(tc.input)
 			require.Error(t, err, errors.ErrUnsupported)
 		})
 	}
@@ -2213,7 +2217,9 @@ func TestNotParentWithEmptyLHS(t *testing.T) {
 	ast, err := Parse(query)
 	require.NoError(t, err)
 
-	out, err := ast.Expr.Leaf.Pipeline.evaluate(ss)
+	leaf, ok := ast.SingleExpression()
+	require.True(t, ok)
+	out, err := leaf.Pipeline.evaluate(ss)
 	require.NoError(t, err)
 
 	// Expect the RHS span to be returned because no LHS parent exists (negated parent)
@@ -2244,8 +2250,10 @@ func TestIntDivisionByZero(t *testing.T) {
 			ast, err := Parse(tc.query)
 			require.NoError(t, err)
 
+			leaf, ok := ast.SingleExpression()
+			require.True(t, ok)
 			require.NotPanics(t, func() {
-				_, err = ast.Pipeline.evaluate(tc.input)
+				_, err = leaf.Pipeline.evaluate(tc.input)
 			})
 			require.Error(t, err)
 		})
@@ -2272,9 +2280,11 @@ func TestFloatDivisionByZero(t *testing.T) {
 			ast, err := Parse(tc.query)
 			require.NoError(t, err)
 
+			leaf, ok := ast.SingleExpression()
+			require.True(t, ok)
 			var result []*Spanset
 			require.NotPanics(t, func() {
-				result, err = ast.Pipeline.evaluate(tc.input)
+				result, err = leaf.Pipeline.evaluate(tc.input)
 			})
 			require.NoError(t, err)
 			require.Empty(t, result, "found spans?")

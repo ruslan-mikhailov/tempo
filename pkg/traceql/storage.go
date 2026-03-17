@@ -318,11 +318,16 @@ func ExtractFetchSpansRequest(query string) (FetchSpansRequest, error) {
 		return FetchSpansRequest{}, err
 	}
 
+	leaf, ok := ast.SingleExpression()
+	if !ok {
+		return FetchSpansRequest{}, ErrMathNotSupported
+	}
+
 	req := FetchSpansRequest{
 		AllConditions: true,
 	}
 
-	ast.Expr.Leaf.Pipeline.extractConditions(&req)
+	leaf.Pipeline.extractConditions(&req)
 	return req, nil
 }
 

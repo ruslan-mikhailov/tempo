@@ -19,6 +19,8 @@ const (
 	DefaultSpansPerSpanSet int = 3
 )
 
+var ErrMathNotSupported = errors.New("math expressions not supported")
+
 type SpansetFilterFunc func(input []*Spanset) (result []*Spanset, err error)
 
 type Engine struct{}
@@ -29,14 +31,21 @@ func NewEngine() *Engine {
 
 // Compile compiles given query. It does not support sub-queries
 func Compile(query string) (*RootExpr, SpansetFilterFunc, firstStageElement, secondStageElement, *FetchSpansRequest, error) {
-	expr, subQueries, err := CompileSubQueries(query)
+	expr, err := Parse(query)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
-	if len(subQueries) != 1 {
-		return nil, nil, nil, nil, nil, errors.New("query is not supported")
+	err = expr.validate()
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
 	}
-	return expr, subQueries[0].eval, subQueries[0].metricsPipeline, subQueries[0].secondStage, subQueries[0].Req, nil
+	leaf, ok := expr.SingleExpression()
+	if !ok {
+		return nil, nil, nil, nil, nil, ErrMathNotSupported
+	}
+	req := &FetchSpansRequest{AllConditions: true}
+	leaf.extractConditions(req)
+	return expr, leaf.Pipeline.evaluate, leaf.MetricsPipeline, leaf.MetricsSecondStage, req, nil
 }
 
 type SubQuery struct {
@@ -115,7 +124,12 @@ func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchReq
 	fetchSpansRequest.StartTimeUnixNanos = unixSecToNano(searchReq.Start)
 	fetchSpansRequest.EndTimeUnixNanos = unixSecToNano(searchReq.End)
 
-	span.SetAttributes(attribute.String("pipeline", rootExpr.Expr.Leaf.Pipeline.String()))
+	leaf, ok := rootExpr.SingleExpression()
+	if !ok {
+		return nil, ErrMathNotSupported
+	}
+
+	span.SetAttributes(attribute.String("pipeline", leaf.Pipeline.String()))
 	span.SetAttributes(attribute.String("fetchSpansRequest", fmt.Sprint(fetchSpansRequest)))
 
 	// calculate search meta conditions.
@@ -129,7 +143,7 @@ func (e *Engine) ExecuteSearch(ctx context.Context, searchReq *tempopb.SearchReq
 			return nil, nil
 		}
 
-		evalSS, err := rootExpr.Expr.Leaf.Pipeline.evaluate([]*Spanset{inSS})
+		evalSS, err := leaf.Pipeline.evaluate([]*Spanset{inSS})
 		if err != nil {
 			span.RecordError(err, trace.WithAttributes(attribute.String("msg", "pipeline.evaluate")))
 			return nil, err
@@ -236,9 +250,14 @@ func (e *Engine) ExecuteTagValues(
 		}
 	}
 
-	autocompleteReq := e.createAutocompleteRequest(tag, rootExpr.Expr.Leaf.Pipeline)
+	leaf, ok := rootExpr.SingleExpression()
+	if !ok {
+		return ErrMathNotSupported
+	}
 
-	span.SetAttributes(attribute.String("pipeline", rootExpr.Expr.Leaf.Pipeline.String()))
+	autocompleteReq := e.createAutocompleteRequest(tag, leaf.Pipeline)
+
+	span.SetAttributes(attribute.String("pipeline", leaf.Pipeline.String()))
 	span.SetAttributes(attribute.String("autocompleteReq", fmt.Sprint(autocompleteReq)))
 
 	// If the tag we are fetching is already filtered in the query, then this is a noop.
@@ -280,9 +299,14 @@ func (e *Engine) ExecuteTagNames(
 			return nil
 		}
 
+		leaf, ok := rootExpr.SingleExpression()
+		if !ok {
+			return ErrMathNotSupported
+		}
+
 		// Query parses and is valid.
 		req := &FetchSpansRequest{}
-		rootExpr.Expr.Leaf.Pipeline.extractConditions(req)
+		leaf.Pipeline.extractConditions(req)
 		conditions = req.Conditions
 	}
 
@@ -292,7 +316,11 @@ func (e *Engine) ExecuteTagNames(
 	}
 
 	if rootExpr != nil {
-		span.SetAttributes(attribute.String("pipeline", rootExpr.Expr.Leaf.Pipeline.String()))
+		leaf, ok := rootExpr.SingleExpression()
+		if !ok {
+			return ErrMathNotSupported
+		}
+		span.SetAttributes(attribute.String("pipeline", leaf.Pipeline.String()))
 	}
 	span.SetAttributes(attribute.String("autocompleteReq", fmt.Sprint(autocompleteReq)))
 

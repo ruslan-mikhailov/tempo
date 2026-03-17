@@ -45,6 +45,13 @@ func (e *RootExpr) HasMathOperation() bool {
 	return e != nil && !e.Expr.IsLeaf()
 }
 
+func (e *RootExpr) SingleExpression() (*ExprLeaf, bool) {
+	if e.HasMathOperation() {
+		return nil, false
+	}
+	return e.Expr.Leaf, true
+}
+
 type Expr struct {
 	Leaf *ExprLeaf
 	Op   Operator
