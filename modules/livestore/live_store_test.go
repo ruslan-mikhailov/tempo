@@ -679,6 +679,64 @@ func requireInstanceState(t *testing.T, inst *instance, state instanceState) {
 	require.Len(t, inst.completeBlocks, state.completeBlocks, "complete blocks count mismatch")
 }
 
+// TestBackpressureNotBlockedBySlowSearch verifies that a slow block read (e.g., S3 timeout)
+// does not block Kafka consumption via a lock convoy in backpressure().
+//
+// The convoy: iterateBlocks holds RLock → cutBlocks tries Lock (pending writer) →
+// Go's RWMutex writer-preference blocks backpressure's RLock → consumption stalls.
+func TestBackpressureNotBlockedBySlowSearch(t *testing.T) {
+	inst, _ := defaultInstance(t)
+
+	// Push data so iterateBlocks has a headBlock to visit
+	pushTracesToInstance(t, inst, 5)
+	require.NoError(t, inst.cutIdleTraces(true))
+
+	// Start a slow search — simulates a slow S3 block read.
+	// iterateBlocks holds blocksMtx.RLock while the callback runs.
+	searchStarted := make(chan struct{})
+	searchDone := make(chan struct{})
+	go func() {
+		_ = inst.iterateBlocks(context.Background(), time.Time{}, time.Time{},
+			func(_ context.Context, _ *backend.BlockMeta, _ block) error {
+				close(searchStarted)
+				<-searchDone // simulate slow block I/O
+				return nil
+			})
+	}()
+	<-searchStarted // RLock is now held by the slow search
+
+	// Trigger a flush — cutBlocks needs blocksMtx.Lock, blocked behind the search's RLock.
+	// This creates the "pending writer" that causes the convoy.
+	go func() {
+		_, _ = inst.cutBlocks(true)
+	}()
+	time.Sleep(50 * time.Millisecond) // let cutBlocks reach Lock()
+
+	// Now try to push data. pushBytes calls backpressure() which (before the fix)
+	// tries blocksMtx.RLock — blocked by the pending writer. This is the convoy.
+	pushDone := make(chan struct{})
+	go func() {
+		defer close(pushDone)
+		id := test.ValidTraceID(nil)
+		tr := test.MakeTrace(1, id)
+		b, err := tr.Marshal()
+		require.NoError(t, err)
+		inst.pushBytes(context.Background(), time.Now(), &tempopb.PushBytesRequest{
+			Traces: []tempopb.PreallocBytes{{Slice: b}},
+			Ids:    [][]byte{id},
+		})
+	}()
+
+	select {
+	case <-pushDone:
+		// pushBytes completed — not blocked by the lock convoy
+	case <-time.After(5 * time.Second):
+		t.Fatal("pushBytes blocked by slow search — lock convoy in backpressure")
+	}
+
+	close(searchDone) // unblock the slow search to clean up
+}
+
 func requireTraceInLiveStore(t *testing.T, liveStore *LiveStore, traceID []byte, expectedTrace *tempopb.Trace) {
 	ctx := user.InjectOrgID(t.Context(), testTenantID)
 	resp, err := liveStore.FindTraceByID(ctx, &tempopb.TraceByIDRequest{
