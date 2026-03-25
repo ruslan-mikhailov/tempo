@@ -82,7 +82,8 @@ func TestLiveStoreFullBlockLifecycleCheating(t *testing.T) {
 	require.NoError(t, err)
 
 	requireTraceInLiveStore(t, liveStore, expectedID, expectedTrace)
-	requireTraceInBlock(t, inst.walBlocks[walUUID], expectedID, expectedTrace)
+	walBlock, _ := inst.walBlocks.Get(walUUID)
+	requireTraceInBlock(t, walBlock, expectedID, expectedTrace)
 	requireInstanceState(t, inst, instanceState{liveTraces: 0, walBlocks: 1, completeBlocks: 0})
 
 	// force complete the wal block
@@ -675,7 +676,7 @@ func createRecordIter(records []*kgo.Record) recordIter {
 
 func requireInstanceState(t *testing.T, inst *instance, state instanceState) {
 	require.Equal(t, uint64(state.liveTraces), inst.liveTraces.Len(), "live traces count mismatch")
-	require.Len(t, inst.walBlocks, state.walBlocks, "wal blocks count mismatch")
+	require.Equal(t, state.walBlocks, inst.walBlocks.Len(), "wal blocks count mismatch")
 	require.Len(t, inst.completeBlocks, state.completeBlocks, "complete blocks count mismatch")
 }
 
@@ -696,7 +697,7 @@ func TestBackpressureNotBlockedBySlowSearch(t *testing.T) {
 	searchStarted := make(chan struct{})
 	searchDone := make(chan struct{})
 	go func() {
-		_ = inst.iterateBlocks(context.Background(), time.Time{}, time.Time{},
+		_ = inst.iterateBlocks(context.Background(), time.Unix(0, 0), time.Unix(0, 0),
 			func(_ context.Context, _ *backend.BlockMeta, _ block) error {
 				close(searchStarted)
 				<-searchDone // simulate slow block I/O

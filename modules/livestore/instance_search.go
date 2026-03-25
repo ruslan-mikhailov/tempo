@@ -97,7 +97,7 @@ func (i *instance) iterateBlocks(ctx context.Context, reqStart, reqEnd time.Time
 	wg := boundedwaitgroup.New(i.Cfg.QueryBlockConcurrency)
 
 	// Process wal blocks
-	for _, b := range i.walBlocks {
+	for _, b := range i.walBlocks.All() {
 		if ctx.Err() != nil {
 			continue
 		}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-kit/log"
@@ -80,6 +81,48 @@ var (
 	}, []string{"reason"})
 )
 
+// walBlockMap wraps a map of WAL blocks with an atomic length counter.
+// The counter can be read lock-free via Len(), avoiding RWMutex contention
+// in the consumption hot path (backpressure).
+// All mutating methods (Set, Delete) must still be called under blocksMtx.Lock.
+type walBlockMap struct {
+	blocks map[uuid.UUID]common.WALBlock
+	len    atomic.Int32
+}
+
+func newWalBlockMap() walBlockMap {
+	return walBlockMap{blocks: map[uuid.UUID]common.WALBlock{}}
+}
+
+func (m *walBlockMap) Set(id uuid.UUID, block common.WALBlock) {
+	if _, ok := m.blocks[id]; !ok {
+		m.len.Add(1)
+	}
+	m.blocks[id] = block
+}
+
+func (m *walBlockMap) Get(id uuid.UUID) (common.WALBlock, bool) {
+	b, ok := m.blocks[id]
+	return b, ok
+}
+
+func (m *walBlockMap) Delete(id uuid.UUID) {
+	if _, ok := m.blocks[id]; ok {
+		m.len.Add(-1)
+	}
+	delete(m.blocks, id)
+}
+
+// Len returns the number of WAL blocks without acquiring any lock.
+func (m *walBlockMap) Len() int {
+	return int(m.len.Load())
+}
+
+// All returns the underlying map for iteration. Caller must hold blocksMtx.
+func (m *walBlockMap) All() map[uuid.UUID]common.WALBlock {
+	return m.blocks
+}
+
 type instance struct {
 	tenantID string
 	logger   log.Logger
@@ -94,7 +137,7 @@ type instance struct {
 	// Block management
 	blocksMtx      sync.RWMutex
 	headBlock      common.WALBlock
-	walBlocks      map[uuid.UUID]common.WALBlock
+	walBlocks      walBlockMap
 	completeBlocks map[uuid.UUID]*ingester.LocalBlock
 	lastCutTime    time.Time
 
@@ -120,7 +163,7 @@ func newInstance(instanceID string, cfg Config, wal *wal.WAL, completeBlockEncod
 		Cfg:                   cfg,
 		wal:                   wal,
 		completeBlockEncoding: completeBlockEncoding,
-		walBlocks:             map[uuid.UUID]common.WALBlock{},
+		walBlocks:             newWalBlockMap(),
 		completeBlocks:        map[uuid.UUID]*ingester.LocalBlock{},
 		liveTraces:            livetraces.New[*v1.ResourceSpans](func(rs *v1.ResourceSpans) uint64 { return uint64(rs.Size()) }, cfg.MaxTraceIdle, cfg.MaxTraceLive, instanceID),
 		traceSizes:            tracesizes.New(),
@@ -161,9 +204,7 @@ func (i *instance) backpressure(ctx context.Context) bool {
 	}
 
 	// Check outstanding wal blocks
-	i.blocksMtx.RLock()
-	count := len(i.walBlocks)
-	i.blocksMtx.RUnlock()
+	count := i.walBlocks.Len()
 
 	if count > 1 {
 		// There are multiple outstanding WAL blocks that need completion
@@ -408,7 +449,7 @@ func (i *instance) cutBlocks(immediate bool) (uuid.UUID, error) {
 
 	id := (uuid.UUID)(i.headBlock.BlockMeta().BlockID)
 	blockSize := i.headBlock.DataLength()
-	i.walBlocks[id] = i.headBlock
+	i.walBlocks.Set(id, i.headBlock)
 
 	level.Info(i.logger).Log("msg", "queueing wal block for completion", "block", id.String(), "size", blockSize)
 
@@ -429,7 +470,7 @@ func (i *instance) completeBlock(ctx context.Context, id uuid.UUID) error {
 	defer span.End()
 
 	i.blocksMtx.Lock()
-	walBlock := i.walBlocks[id]
+	walBlock, _ := i.walBlocks.Get(id)
 	i.blocksMtx.Unlock()
 
 	if walBlock == nil {
@@ -472,7 +513,7 @@ func (i *instance) completeBlock(ctx context.Context, id uuid.UUID) error {
 	defer i.blocksMtx.Unlock()
 
 	// Verify the WAL block still exists
-	if _, ok := i.walBlocks[id]; !ok {
+	if _, ok := i.walBlocks.Get(id); !ok {
 		level.Warn(i.logger).Log("msg", "WAL block disappeared while being completed, deleting complete block", "id", id)
 		err := i.wal.LocalBackend().ClearBlock(id, i.tenantID)
 		if err != nil {
@@ -489,7 +530,7 @@ func (i *instance) completeBlock(ctx context.Context, id uuid.UUID) error {
 		level.Error(i.logger).Log("msg", "failed to clear WAL block", "id", id, "err", err)
 		span.RecordError(err)
 	}
-	delete(i.walBlocks, (uuid.UUID)(walBlock.BlockMeta().BlockID))
+	i.walBlocks.Delete((uuid.UUID)(walBlock.BlockMeta().BlockID))
 
 	level.Info(i.logger).Log("msg", "completed block", "id", id.String())
 	span.AddEvent("block completed successfully")
@@ -502,7 +543,7 @@ func (i *instance) deleteOldBlocks() error {
 
 	cutoff := time.Now().Add(-i.Cfg.CompleteBlockTimeout) // Delete blocks older than Complete Block Timeout
 
-	for id, walBlock := range i.walBlocks {
+	for id, walBlock := range i.walBlocks.All() {
 		if walBlock.BlockMeta().EndTime.Before(cutoff) {
 			if _, ok := i.completeBlocks[id]; !ok {
 				level.Warn(i.logger).Log("msg", "deleting WAL block that was never completed", "block", id.String())
@@ -511,7 +552,7 @@ func (i *instance) deleteOldBlocks() error {
 			if err != nil {
 				return err
 			}
-			delete(i.walBlocks, id)
+			i.walBlocks.Delete(id)
 			metricBlocksClearedTotal.WithLabelValues("wal").Inc()
 		}
 	}
