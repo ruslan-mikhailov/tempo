@@ -1,23 +1,11 @@
 package traceql
 
-func (e Expr) extractConditions(request *FetchSpansRequest) {
-	if !e.IsLeaf() {
-		e.LHS.extractConditions(request)
-		e.RHS.extractConditions(request)
-		return
-	}
-
-	e.Leaf.extractConditions(request)
-}
-
 func (r RootExpr) extractConditions(request *FetchSpansRequest) {
-	r.Expr.extractConditions(request)
-}
-
-func (e ExprLeaf) extractConditions(request *FetchSpansRequest) {
-	e.Pipeline.extractConditions(request)
-	if e.MetricsPipeline != nil {
-		e.MetricsPipeline.extractConditions(request)
+	for _, p := range r.Pipeline {
+		p.extractConditions(request)
+	}
+	for _, sp := range r.BatchSpanProcessor {
+		sp.extractConditions(request)
 	}
 }
 

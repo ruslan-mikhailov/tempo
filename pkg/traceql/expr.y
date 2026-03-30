@@ -133,8 +133,8 @@ root:
   | scalarPipelineExpressionFilter                                        { yylex.(*lexer).expr = newRootExpr($1) }
   | spansetPipeline PIPE metricsAggregation                               { yylex.(*lexer).expr = newRootExprWithMetrics($1, $3) }
   | spansetPipeline PIPE metricsAggregation metricsSecondStagePipeline    { yylex.(*lexer).expr = newRootExprWithMetricsTwoStage($1, $3, $4) }
-  | metricsExpression                                                     { yylex.(*lexer).expr = $1 }
-  | metricsExpression metricsSecondStagePipeline                           { $1.MetricsSecondStage = $2; yylex.(*lexer).expr = $1 }
+  | metricsExpression                                                     { yylex.(*lexer).expr = unwrapSingleMathExpr($1) }
+  | metricsExpression metricsSecondStagePipeline                           { yylex.(*lexer).expr = chainMathSecondStage($1, $2) }
   | root hints                                                            { yylex.(*lexer).expr.withHints($2) }
   ;
 
@@ -385,9 +385,9 @@ metricsExpression:
 
 wrappedMetricsPipeline:
     OPEN_PARENS spansetPipeline PIPE metricsAggregation CLOSE_PARENS
-      { $$ = newRootExprWithMetrics($2, $4) }
+      { $$ = newWrappedMetricsPipeline($2, $4, nil) }
   | OPEN_PARENS spansetPipeline PIPE metricsAggregation metricsSecondStagePipeline CLOSE_PARENS
-      { $$ = newRootExprWithMetricsTwoStage($2, $4, $5) }
+      { $$ = newWrappedMetricsPipeline($2, $4, $5) }
   ;
 
 // **********************

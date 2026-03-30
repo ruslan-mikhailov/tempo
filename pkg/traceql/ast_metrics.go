@@ -9,15 +9,86 @@ import (
 	"github.com/grafana/tempo/pkg/tempopb"
 )
 
-type firstStageElement interface {
-	Element
-	extractConditions(request *FetchSpansRequest)
+// metricsElement is the shared base for span and series processing pipelines.
+// It does NOT embed Element — these are runtime evaluation interfaces, not AST nodes.
+type metricsElement interface {
 	init(req *tempopb.QueryRangeRequest, mode AggregateMode)
-	observe(Span) // TODO - batching?
-	observeExemplar(Span)
-	observeSeries([]*tempopb.TimeSeries) // Re-entrant metrics on the query-frontend.  Using proto version for efficiency
 	result(multiplier float64) SeriesSet
 	length() int
+}
+
+// spanProcessor handles L1 backend/storage evaluation: individual span observation.
+type spanProcessor interface {
+	metricsElement
+	extractConditions(request *FetchSpansRequest)
+	observe(Span)
+	observeExemplar(Span)
+}
+
+// seriesProcessor handles L2/L3 frontend evaluation: pre-aggregated time series.
+type seriesProcessor interface {
+	metricsElement
+	observeSeries([]*tempopb.TimeSeries)
+}
+
+// firstStageElement is the full interface satisfied by concrete metrics
+// aggregator types (MetricsAggregate, MetricsCompare, averageOverTimeAggregator).
+// It combines Element (for AST operations), spanProcessor (L1), and
+// seriesProcessor (L2/L3). Used in constructors that store the same instance
+// in both BatchSpanProcessor and SeriesProcessor maps.
+type firstStageElement interface {
+	Element
+	spanProcessor
+	seriesProcessor
+}
+
+// batchSeriesProcessor routes incoming time series to sub-processors by
+// the __query_fragment label. It implements seriesProcessor so the frontend
+// evaluator can treat math and non-math queries uniformly.
+type batchSeriesProcessor map[string]seriesProcessor
+
+var _ seriesProcessor = batchSeriesProcessor(nil)
+
+func (b batchSeriesProcessor) init(req *tempopb.QueryRangeRequest, mode AggregateMode) {
+	for _, p := range b {
+		p.init(req, mode)
+	}
+}
+
+func (b batchSeriesProcessor) observeSeries(in []*tempopb.TimeSeries) {
+	fragments := make(map[string][]*tempopb.TimeSeries, len(b))
+	for _, ts := range in {
+		for _, label := range ts.Labels {
+			if label.GetKey() == internalLabelQueryFragment {
+				fragmentKey := label.GetValue().GetStringValue()
+				fragments[fragmentKey] = append(fragments[fragmentKey], ts)
+				break
+			}
+		}
+	}
+	for k, v := range fragments {
+		if p, ok := b[k]; ok {
+			p.observeSeries(v)
+		}
+	}
+}
+
+func (b batchSeriesProcessor) result(multiplier float64) SeriesSet {
+	combined := make(SeriesSet)
+	for _, p := range b {
+		for k, v := range p.result(multiplier) {
+			combined[k] = v
+		}
+	}
+	return combined
+}
+
+func (b batchSeriesProcessor) length() int {
+	var total int
+	for _, p := range b {
+		total += p.length()
+	}
+	return total
 }
 
 type getExemplar func(Span) (float64, uint64)
@@ -342,7 +413,11 @@ func (a *MetricsAggregate) validate() error {
 	return nil
 }
 
-var _ firstStageElement = (*MetricsAggregate)(nil)
+var (
+	_ firstStageElement = (*MetricsAggregate)(nil)
+	_ spanProcessor     = (*MetricsAggregate)(nil)
+	_ seriesProcessor   = (*MetricsAggregate)(nil)
+)
 
 // secondStageElement represents operations that are performed
 // in the second stage metrics pipeline, such as topK/bottomK, etc.

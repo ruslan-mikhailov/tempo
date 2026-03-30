@@ -181,9 +181,8 @@ func TestOne(t *testing.T) {
 			Step:  uint64(1 * time.Second),
 		}
 	)
-	eval, err := traceql.NewEngine().CompileMetricsQueryRange(req, 1, false)
+	fetchSpansRequest, err := traceql.ExtractFetchSpansRequest(q)
 	require.NoError(t, err)
-	fetchSpansRequest := eval.FetchSpansRequest()
 
 	spanOnly, err := b.FetchSpans(ctx, fetchSpansRequest, common.DefaultSearchOptions())
 	require.NoError(t, err, "search request:", req)

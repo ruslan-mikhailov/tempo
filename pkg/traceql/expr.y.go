@@ -1030,13 +1030,12 @@ yydefault:
 	case 6:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		{
-			yylex.(*lexer).expr = yyDollar[1].metricsExpression
+			yylex.(*lexer).expr = unwrapSingleMathExpr(yyDollar[1].metricsExpression)
 		}
 	case 7:
 		yyDollar = yyS[yypt-2 : yypt+1]
 		{
-			yyDollar[1].metricsExpression.MetricsSecondStage = yyDollar[2].metricsSecondStagePipeline
-			yylex.(*lexer).expr = yyDollar[1].metricsExpression
+			yylex.(*lexer).expr = chainMathSecondStage(yyDollar[1].metricsExpression, yyDollar[2].metricsSecondStagePipeline)
 		}
 	case 8:
 		yyDollar = yyS[yypt-2 : yypt+1]
@@ -1761,12 +1760,12 @@ yydefault:
 	case 152:
 		yyDollar = yyS[yypt-5 : yypt+1]
 		{
-			yyVAL.metricsExpression = newRootExprWithMetrics(yyDollar[2].spansetPipeline, yyDollar[4].metricsAggregation)
+			yyVAL.metricsExpression = newWrappedMetricsPipeline(yyDollar[2].spansetPipeline, yyDollar[4].metricsAggregation, nil)
 		}
 	case 153:
 		yyDollar = yyS[yypt-6 : yypt+1]
 		{
-			yyVAL.metricsExpression = newRootExprWithMetricsTwoStage(yyDollar[2].spansetPipeline, yyDollar[4].metricsAggregation, yyDollar[5].metricsSecondStagePipeline)
+			yyVAL.metricsExpression = newWrappedMetricsPipeline(yyDollar[2].spansetPipeline, yyDollar[4].metricsAggregation, yyDollar[5].metricsSecondStagePipeline)
 		}
 	case 154:
 		yyDollar = yyS[yypt-3 : yypt+1]

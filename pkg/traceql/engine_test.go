@@ -384,11 +384,11 @@ func (m *MockAutocompleteFetcher) Fetch(ctx context.Context, req FetchTagValuesR
 			continue
 		}
 
-		leaf, ok := rootExpr.SingleExpression()
+		pipeline, _, ok := rootExpr.SinglePipeline()
 		if !ok {
 			return ErrMathNotSupported
 		}
-		evalSS, _ := leaf.Pipeline.evaluate([]*Spanset{spanset})
+		evalSS, _ := pipeline.evaluate([]*Spanset{spanset})
 
 		for _, ss := range evalSS {
 			for _, s := range ss.Spans {

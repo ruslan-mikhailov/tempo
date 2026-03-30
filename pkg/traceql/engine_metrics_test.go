@@ -3789,7 +3789,7 @@ func BenchmarkMetricsFrontendEvaluator(b *testing.B) {
 		}
 	}
 
-	compileSingle := func(b *testing.B, mode AggregateMode) MetricsFrontendEvaluator {
+	compileSingle := func(b *testing.B, mode AggregateMode) *MetricsFrontendEvaluator {
 		b.Helper()
 		e := NewEngine()
 		eval, err := e.CompileMetricsQueryRangeNonRaw(newReq(singleQuery), mode)
@@ -3797,7 +3797,7 @@ func BenchmarkMetricsFrontendEvaluator(b *testing.B) {
 		return eval
 	}
 
-	compileMath := func(b *testing.B, mode AggregateMode) MetricsFrontendEvaluator {
+	compileMath := func(b *testing.B, mode AggregateMode) *MetricsFrontendEvaluator {
 		b.Helper()
 		e := NewEngine()
 		eval, err := e.CompileMetricsQueryRangeNonRaw(newReq(mathQuery), mode)
@@ -3807,11 +3807,11 @@ func BenchmarkMetricsFrontendEvaluator(b *testing.B) {
 
 	mathFragmentKeys := func(b *testing.B) []string {
 		b.Helper()
-		_, subQueries, err := CompileSubQueries(mathQuery)
+		expr, err := Parse(mathQuery)
 		require.NoError(b, err)
-		keys := make([]string, len(subQueries))
-		for i, q := range subQueries {
-			keys[i] = q.Query
+		keys := make([]string, 0, len(expr.BatchSpanProcessor))
+		for k := range expr.BatchSpanProcessor {
+			keys = append(keys, k)
 		}
 		return keys
 	}

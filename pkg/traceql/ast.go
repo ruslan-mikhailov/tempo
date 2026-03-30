@@ -30,63 +30,49 @@ type typedExpression interface {
 	impliedType() StaticType
 }
 
-// RootExpr is the top-level AST node. A leaf node (Op == OpNone) embeds a
-// single Expr. A math node (Op != OpNone) combines two sub-trees via a
-// binary arithmetic operator (+, -, *, /).
+// RootExpr is the top-level AST node. It holds per-sub-query data in maps
+// (keyed by fragment string), a single SeriesProcessor for L2/L3 evaluation,
+// and a MetricsSecondStage that may include a mathExpression tree.
 type RootExpr struct {
+	Pipeline           map[string]Pipeline      // per-sub-query spanset filters
+	BatchSpanProcessor map[string]spanProcessor // L1: per-sub-query span processing
+	SeriesProcessor    seriesProcessor          // L2/L3: routes internally if math
+	MetricsSecondStage secondStageElement       // Final: mathExpression + topk/filter chain
 	Hints              *Hints
 	OptimizationCount  int
-	Expr               Expr
-	MetricsSecondStage secondStageElement
 }
 
-func (e *RootExpr) HasMathOperation() bool {
-	// if first expression is already a leaf, then there are no math operations
-	return e != nil && !e.Expr.IsLeaf()
+// IsMath returns true if the expression involves binary arithmetic between
+// metrics sub-queries (even if deduplicated to a single sub-query).
+func (r *RootExpr) IsMath() bool {
+	return r != nil && r.hasMathSecondStage()
 }
 
-func (e *RootExpr) SingleExpression() (*ExprLeaf, bool) {
-	if e.HasMathOperation() {
-		return nil, false
+func (r RootExpr) hasMathSecondStage() bool {
+	if m, ok := r.MetricsSecondStage.(*mathExpression); ok {
+		return m.op != OpNone // leaf mathExpression is not "math"
 	}
-	return e.Expr.Leaf, true
-}
-
-type Expr struct {
-	Leaf *ExprLeaf
-	Op   Operator
-	LHS  *Expr
-	RHS  *Expr
-}
-
-// ExprLeaf holds the data for a single TraceQL query: its pipeline, optional
-// metrics stages, hints, and optimisation metadata.
-type ExprLeaf struct {
-	Pipeline           Pipeline
-	MetricsPipeline    firstStageElement
-	MetricsSecondStage secondStageElement
-}
-
-func (e *Expr) CollectLeaves() []ExprLeaf {
-	leaves := make([]ExprLeaf, 0, 8)
-	e.collectLeaves(&leaves)
-	return leaves
-}
-
-func (e *Expr) collectLeaves(out *[]ExprLeaf) {
-	if e == nil {
-		return
+	if cs, ok := r.MetricsSecondStage.(ChainedSecondStage); ok && len(cs) > 0 {
+		if m, ok := cs[0].(*mathExpression); ok {
+			return m.op != OpNone
+		}
 	}
-	if e.Leaf != nil {
-		*out = append(*out, *e.Leaf)
-		return
-	}
-	e.LHS.collectLeaves(out)
-	e.RHS.collectLeaves(out)
+	return false
 }
 
-func (e *Expr) IsLeaf() bool {
-	return e.Leaf != nil
+// SinglePipeline returns the pipeline and span processor when there is exactly
+// one sub-query (non-math). Returns false for math expressions.
+func (r *RootExpr) SinglePipeline() (Pipeline, spanProcessor, bool) {
+	if r.IsMath() {
+		return Pipeline{}, nil, false
+	}
+	for _, p := range r.Pipeline {
+		for _, sp := range r.BatchSpanProcessor {
+			return p, sp, true
+		}
+		return p, nil, true
+	}
+	return Pipeline{}, nil, false
 }
 
 func NeedsFullTrace(e ...Element) bool {
@@ -115,23 +101,15 @@ func NeedsFullTrace(e ...Element) bool {
 	return false
 }
 
-func (e *Expr) NeedsFullTrace() bool {
-	if e == nil {
-		return false
-	}
-	if !e.IsLeaf() {
-		return e.LHS.NeedsFullTrace() || e.RHS.NeedsFullTrace()
-	}
-	for _, el := range e.Leaf.Pipeline.Elements {
-		if NeedsFullTrace(el) {
-			return true
+func (r *RootExpr) NeedsFullTrace() bool {
+	for _, p := range r.Pipeline {
+		for _, el := range p.Elements {
+			if NeedsFullTrace(el) {
+				return true
+			}
 		}
 	}
 	return false
-}
-
-func (r *RootExpr) NeedsFullTrace() bool {
-	return r.Expr.NeedsFullTrace()
 }
 
 func newRootExpr(e PipelineElement) *RootExpr {
@@ -140,8 +118,9 @@ func newRootExpr(e PipelineElement) *RootExpr {
 		p = newPipeline(e)
 	}
 
+	key := p.String()
 	return &RootExpr{
-		Expr: Expr{Leaf: &ExprLeaf{Pipeline: p}},
+		Pipeline: map[string]Pipeline{key: p},
 	}
 }
 
@@ -151,11 +130,11 @@ func newRootExprWithMetrics(e PipelineElement, m firstStageElement) *RootExpr {
 		p = newPipeline(e)
 	}
 
+	key := p.String() + " | " + m.String()
 	return &RootExpr{
-		Expr: Expr{Leaf: &ExprLeaf{
-			Pipeline:        p,
-			MetricsPipeline: m,
-		}},
+		Pipeline:           map[string]Pipeline{key: p},
+		BatchSpanProcessor: map[string]spanProcessor{key: m},
+		SeriesProcessor:    m,
 	}
 }
 
@@ -165,23 +144,131 @@ func newRootExprWithMetricsTwoStage(e PipelineElement, m1 firstStageElement, m2 
 		p = newPipeline(e)
 	}
 
+	// Key does NOT include the root-level second stage — it identifies the sub-query only.
+	key := p.String() + " | " + m1.String()
 	return &RootExpr{
-		Expr: Expr{Leaf: &ExprLeaf{
-			Pipeline:           p,
-			MetricsPipeline:    m1,
-			MetricsSecondStage: m2,
-		}},
+		Pipeline:           map[string]Pipeline{key: p},
+		BatchSpanProcessor: map[string]spanProcessor{key: m1},
+		SeriesProcessor:    m1,
+		MetricsSecondStage: m2,
 	}
 }
 
 func newRootExprMath(op Operator, lhs, rhs *RootExpr) *RootExpr {
+	// Merge maps from both sides
+	pipelines := make(map[string]Pipeline, len(lhs.Pipeline)+len(rhs.Pipeline))
+	spanProcs := make(map[string]spanProcessor, len(lhs.BatchSpanProcessor)+len(rhs.BatchSpanProcessor))
+	seriesProcs := make(batchSeriesProcessor, len(lhs.BatchSpanProcessor)+len(rhs.BatchSpanProcessor))
+	for k, v := range lhs.Pipeline {
+		pipelines[k] = v
+	}
+	for k, v := range rhs.Pipeline {
+		pipelines[k] = v
+	}
+	for k, v := range lhs.BatchSpanProcessor {
+		spanProcs[k] = v
+	}
+	for k, v := range rhs.BatchSpanProcessor {
+		spanProcs[k] = v
+	}
+	// Build series processors from the same concrete types.
+	// SeriesProcessor on each side is already set correctly.
+	if lhsBatch, ok := lhs.SeriesProcessor.(batchSeriesProcessor); ok {
+		for k, v := range lhsBatch {
+			seriesProcs[k] = v
+		}
+	} else if lhs.SeriesProcessor != nil {
+		for k := range lhs.Pipeline {
+			seriesProcs[k] = lhs.SeriesProcessor
+		}
+	}
+	if rhsBatch, ok := rhs.SeriesProcessor.(batchSeriesProcessor); ok {
+		for k, v := range rhsBatch {
+			seriesProcs[k] = v
+		}
+	} else if rhs.SeriesProcessor != nil {
+		for k := range rhs.Pipeline {
+			seriesProcs[k] = rhs.SeriesProcessor
+		}
+	}
+
 	return &RootExpr{
-		Expr: Expr{
-			Op:  op,
-			LHS: &lhs.Expr,
-			RHS: &rhs.Expr,
+		Pipeline:           pipelines,
+		BatchSpanProcessor: spanProcs,
+		SeriesProcessor:    seriesProcs,
+		MetricsSecondStage: &mathExpression{
+			op:  op,
+			lhs: asMathExpression(lhs.MetricsSecondStage),
+			rhs: asMathExpression(rhs.MetricsSecondStage),
 		},
 	}
+}
+
+// asMathExpression extracts a mathExpression from a secondStageElement.
+// Panics if s is non-nil and not a *mathExpression — this indicates a
+// grammar bug where newRootExprMath received a non-math sub-expression.
+func asMathExpression(s secondStageElement) *mathExpression {
+	if s == nil {
+		return nil
+	}
+	if m, ok := s.(*mathExpression); ok {
+		return m
+	}
+	panic(fmt.Sprintf("asMathExpression: unexpected type %T", s))
+}
+
+// newWrappedMetricsPipeline creates a RootExpr for a parenthesized metrics
+// pipeline inside a metricsExpression. It sets MetricsSecondStage to a leaf
+// mathExpression so it can be combined with binary math operators.
+func newWrappedMetricsPipeline(e PipelineElement, m1 firstStageElement, m2 secondStageElement) *RootExpr {
+	p, ok := e.(Pipeline)
+	if !ok {
+		p = newPipeline(e)
+	}
+
+	key := p.String() + " | " + m1.String()
+	if m2 != nil {
+		key += m2.String()
+	}
+	return &RootExpr{
+		Pipeline:           map[string]Pipeline{key: p},
+		BatchSpanProcessor: map[string]spanProcessor{key: m1},
+		SeriesProcessor:    m1,
+		MetricsSecondStage: &mathExpression{op: OpNone, key: key, filter: m2},
+	}
+}
+
+// unwrapSingleMathExpr is called when a metricsExpression is used as the root.
+// If it's a single wrapped pipeline (no binary ops), unwrap back to a plain
+// non-math RootExpr. Otherwise, keep the math structure.
+func unwrapSingleMathExpr(r *RootExpr) *RootExpr {
+	if !r.IsMath() {
+		// Single entry — drop the leaf mathExpression, keep any per-leaf filter
+		// as the root MetricsSecondStage.
+		if m, ok := r.MetricsSecondStage.(*mathExpression); ok && m.op == OpNone {
+			r.MetricsSecondStage = m.filter // nil if no per-leaf second stage
+		}
+	}
+	return r
+}
+
+// chainMathSecondStage chains a root-level second stage pipeline after a
+// metricsExpression. For math: chains math + topk/filter. For single: same
+// as unwrapSingleMathExpr then append.
+func chainMathSecondStage(r *RootExpr, stage ChainedSecondStage) *RootExpr {
+	if !r.IsMath() {
+		// Single entry — unwrap leaf mathExpression, chain with root stage
+		r = unwrapSingleMathExpr(r)
+		if r.MetricsSecondStage != nil {
+			r.MetricsSecondStage = append(ChainedSecondStage{r.MetricsSecondStage}, stage...)
+		} else {
+			r.MetricsSecondStage = stage
+		}
+		return r
+	}
+	// Math: prepend mathExpression to the chain
+	r.MetricsSecondStage = append(ChainedSecondStage{r.MetricsSecondStage}, stage...)
+	return r
 }
 
 func (r *RootExpr) withHints(h *Hints) *RootExpr {
@@ -191,11 +278,7 @@ func (r *RootExpr) withHints(h *Hints) *RootExpr {
 
 // IsNoop detects trivial noop queries like {false} which never return
 // results and can be used to exit early.
-func (e *Expr) IsNoop() bool {
-	if !e.IsLeaf() {
-		return e.LHS.IsNoop() && e.RHS.IsNoop()
-	}
-
+func (r *RootExpr) IsNoop() bool {
 	isNoopFilter := func(x any) bool {
 		f, ok := x.(*SpansetFilter)
 		if !ok {
@@ -211,33 +294,29 @@ func (e *Expr) IsNoop() bool {
 		return v.Equals(&StaticFalse)
 	}
 
-	// Any spanset filter that references the span or something other
-	// than static false means the expression isn't noop.
-	// This checks one layer deep which covers most expressions.
-	for _, el := range e.Leaf.Pipeline.Elements {
-		switch x := el.(type) {
-		case SpansetOperation:
-			if !isNoopFilter(x.LHS) {
+	for _, p := range r.Pipeline {
+		// Any spanset filter that references the span or something other
+		// than static false means the expression isn't noop.
+		// This checks one layer deep which covers most expressions.
+		for _, el := range p.Elements {
+			switch x := el.(type) {
+			case SpansetOperation:
+				if !isNoopFilter(x.LHS) {
+					return false
+				}
+				if !isNoopFilter(x.RHS) {
+					return false
+				}
+			case *SpansetFilter:
+				if !isNoopFilter(x) {
+					return false
+				}
+			default:
 				return false
 			}
-			if !isNoopFilter(x.RHS) {
-				return false
-			}
-		case *SpansetFilter:
-			if !isNoopFilter(x) {
-				return false
-			}
-		default:
-			// Lots of other expressions here which aren't checked
-			// for noops yet.
-			return false
 		}
 	}
 	return true
-}
-
-func (r *RootExpr) IsNoop() bool {
-	return r.Expr.IsNoop()
 }
 
 // **********************

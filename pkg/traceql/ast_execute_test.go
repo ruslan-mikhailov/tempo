@@ -35,9 +35,9 @@ func testEvaluator(t *testing.T, tc evalTC) {
 				cloneIn[i].Spans = append([]Span(nil), tc.input[i].Spans...)
 			}
 
-			leaf, ok := ast.SingleExpression()
+			pipeline, _, ok := ast.SinglePipeline()
 			require.True(t, ok)
-			actual, err := leaf.Pipeline.evaluate(tc.input)
+			actual, err := pipeline.evaluate(tc.input)
 			require.NoError(t, err)
 
 			// sort expected/actual spansets. grouping requires this b/c map iteration makes the output
@@ -1261,9 +1261,9 @@ func TestSpansetOperationEvaluateArrayUnsupported(t *testing.T) {
 				cloneIn[i].Spans = append([]Span(nil), tc.input[i].Spans...)
 			}
 
-			leaf, ok := ast.SingleExpression()
+			pipeline, _, ok := ast.SinglePipeline()
 			require.True(t, ok)
-			_, err = leaf.Pipeline.evaluate(tc.input)
+			_, err = pipeline.evaluate(tc.input)
 			require.Error(t, err, errors.ErrUnsupported)
 		})
 	}
@@ -2217,9 +2217,9 @@ func TestNotParentWithEmptyLHS(t *testing.T) {
 	ast, err := Parse(query)
 	require.NoError(t, err)
 
-	leaf, ok := ast.SingleExpression()
+	pipeline, _, ok := ast.SinglePipeline()
 	require.True(t, ok)
-	out, err := leaf.Pipeline.evaluate(ss)
+	out, err := pipeline.evaluate(ss)
 	require.NoError(t, err)
 
 	// Expect the RHS span to be returned because no LHS parent exists (negated parent)
@@ -2250,10 +2250,10 @@ func TestIntDivisionByZero(t *testing.T) {
 			ast, err := Parse(tc.query)
 			require.NoError(t, err)
 
-			leaf, ok := ast.SingleExpression()
+			pipeline, _, ok := ast.SinglePipeline()
 			require.True(t, ok)
 			require.NotPanics(t, func() {
-				_, err = leaf.Pipeline.evaluate(tc.input)
+				_, err = pipeline.evaluate(tc.input)
 			})
 			require.Error(t, err)
 		})
@@ -2280,11 +2280,11 @@ func TestFloatDivisionByZero(t *testing.T) {
 			ast, err := Parse(tc.query)
 			require.NoError(t, err)
 
-			leaf, ok := ast.SingleExpression()
+			pipeline, _, ok := ast.SinglePipeline()
 			require.True(t, ok)
 			var result []*Spanset
 			require.NotPanics(t, func() {
-				result, err = leaf.Pipeline.evaluate(tc.input)
+				result, err = pipeline.evaluate(tc.input)
 			})
 			require.NoError(t, err)
 			require.Empty(t, result, "found spans?")

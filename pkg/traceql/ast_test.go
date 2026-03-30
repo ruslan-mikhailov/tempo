@@ -721,9 +721,9 @@ func TestPipelineExtractConditions(t *testing.T) {
 			actualRequest := FetchSpansRequest{
 				AllConditions: true,
 			}
-			leaf, ok := ast.SingleExpression()
+			pipeline, _, ok := ast.SinglePipeline()
 			require.True(t, ok)
-			leaf.Pipeline.extractConditions(&actualRequest)
+			pipeline.extractConditions(&actualRequest)
 			require.Equal(t, tc.request, actualRequest)
 		})
 	}
@@ -772,9 +772,9 @@ func TestPipelineEvaluate(t *testing.T) {
 			ast, err := Parse(tc.query)
 			require.NoError(t, err)
 
-			leaf, ok := ast.SingleExpression()
+			pipeline, _, ok := ast.SinglePipeline()
 			require.True(t, ok)
-			actual, err := leaf.Pipeline.evaluate(tc.input)
+			actual, err := pipeline.evaluate(tc.input)
 			require.NoError(t, err)
 			require.Equal(t, tc.output, actual)
 		})
@@ -920,9 +920,9 @@ func TestSpansetFilterEvaluate(t *testing.T) {
 			ast, err := Parse(tc.query)
 			require.NoError(t, err)
 
-			leaf, ok := ast.SingleExpression()
+			pipeline, _, ok := ast.SinglePipeline()
 			require.True(t, ok)
-			filt := leaf.Pipeline.Elements[0].(*SpansetFilter)
+			filt := pipeline.Elements[0].(*SpansetFilter)
 
 			actual, err := filt.evaluate(tc.input)
 			require.NoError(t, err)
