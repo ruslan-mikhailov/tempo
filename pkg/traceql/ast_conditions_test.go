@@ -132,9 +132,9 @@ func TestSpansetFilter_extractConditions(t *testing.T) {
 			expr, err := Parse(tt.query)
 			require.NoError(t, err)
 
-			leaf, ok := expr.SingleExpression()
+			pipeline, _, ok := expr.SinglePipeline()
 			require.True(t, ok)
-			spansetFilter := leaf.Pipeline.Elements[0].(*SpansetFilter)
+			spansetFilter := pipeline.Elements[0].(*SpansetFilter)
 
 			req := &FetchSpansRequest{
 				Conditions:    []Condition{},
@@ -195,9 +195,9 @@ func TestScalarFilter_extractConditions(t *testing.T) {
 				Conditions:    []Condition{},
 				AllConditions: true,
 			}
-			leaf, ok := expr.SingleExpression()
+			pipeline, _, ok := expr.SinglePipeline()
 			require.True(t, ok)
-			leaf.Pipeline.extractConditions(req)
+			pipeline.extractConditions(req)
 
 			assert.Equal(t, tt.conditions, req.Conditions)
 			assert.Nil(t, req.SecondPassConditions)
@@ -246,9 +246,9 @@ func TestStructuralNestedSet_extractConditions(t *testing.T) {
 				Conditions:    []Condition{},
 				AllConditions: true,
 			}
-			leaf, ok := expr.SingleExpression()
+			pipeline, _, ok := expr.SinglePipeline()
 			require.True(t, ok)
-			leaf.Pipeline.extractConditions(req)
+			pipeline.extractConditions(req)
 
 			assert.Equal(t, tt.conditions, req.Conditions)
 			assert.Nil(t, req.SecondPassConditions)
@@ -308,9 +308,9 @@ func TestSelect_extractConditions(t *testing.T) {
 				Conditions:    []Condition{},
 				AllConditions: true,
 			}
-			leaf, ok := expr.SingleExpression()
+			pipeline, _, ok := expr.SinglePipeline()
 			require.True(t, ok)
-			leaf.Pipeline.extractConditions(req)
+			pipeline.extractConditions(req)
 
 			assert.Equal(t, tt.conditions, req.Conditions)
 			assert.Equal(t, tt.secondPassConditions, req.SecondPassConditions)

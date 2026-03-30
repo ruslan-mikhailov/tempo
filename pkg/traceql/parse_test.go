@@ -1917,6 +1917,7 @@ func TestMetricsSecondStageErrors(t *testing.T) {
 }
 
 func TestMetricsMathExpression(t *testing.T) {
+	w := newWrappedMetricsPipeline // alias for readability
 	tests := []struct {
 		in       string
 		expected *RootExpr
@@ -1924,101 +1925,71 @@ func TestMetricsMathExpression(t *testing.T) {
 		{
 			in: `({status=error} | count_over_time()) / ({} | count_over_time())`,
 			expected: newRootExprMath(OpDiv,
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(newBinaryOperation(OpEqual, NewIntrinsic(IntrinsicStatus), NewStaticStatus(StatusError)))),
-					newMetricsAggregate(metricsAggregateCountOverTime, nil),
-				),
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateCountOverTime, nil),
-				),
+				w(newPipeline(newSpansetFilter(newBinaryOperation(OpEqual, NewIntrinsic(IntrinsicStatus), NewStaticStatus(StatusError)))),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
 			),
 		},
 		{
 			in: `({} | rate()) + ({} | rate())`,
 			expected: newRootExprMath(OpAdd,
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateRate, nil),
-				),
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateRate, nil),
-				),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateRate, nil), nil),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateRate, nil), nil),
 			),
 		},
 		{
 			in: `({} | count_over_time()) * ({} | count_over_time())`,
 			expected: newRootExprMath(OpMult,
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateCountOverTime, nil),
-				),
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateCountOverTime, nil),
-				),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
 			),
 		},
 		{
 			in: `({} | count_over_time()) - ({} | count_over_time())`,
 			expected: newRootExprMath(OpSub,
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateCountOverTime, nil),
-				),
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateCountOverTime, nil),
-				),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
 			),
 		},
 		{
 			in: `(({} | count_over_time()) - ({} | count_over_time())) / ({} | count_over_time())`,
 			expected: newRootExprMath(OpDiv,
 				newRootExprMath(OpSub,
-					newRootExprWithMetrics(
-						newPipeline(newSpansetFilter(NewStaticBool(true))),
-						newMetricsAggregate(metricsAggregateCountOverTime, nil),
-					),
-					newRootExprWithMetrics(
-						newPipeline(newSpansetFilter(NewStaticBool(true))),
-						newMetricsAggregate(metricsAggregateCountOverTime, nil),
-					),
+					w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+						newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
+					w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+						newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
 				),
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateCountOverTime, nil),
-				),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
 			),
 		},
 		{
 			in: `({} | count_over_time() by(resource.service.name)) / ({} | count_over_time())`,
 			expected: newRootExprMath(OpDiv,
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
 					newMetricsAggregate(metricsAggregateCountOverTime, []Attribute{
 						NewScopedAttribute(AttributeScopeResource, false, "service.name"),
-					}),
-				),
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateCountOverTime, nil),
-				),
+					}), nil),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateCountOverTime, nil), nil),
 			),
 		},
 		{
 			in: `({} | rate() | topk(10)) / ({} | rate())`,
 			expected: newRootExprMath(OpDiv,
-				newRootExprWithMetricsTwoStage(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
 					newMetricsAggregate(metricsAggregateRate, nil),
-					ChainedSecondStage{newTopKBottomK(OpTopK, 10, " | ")},
-				),
-				newRootExprWithMetrics(
-					newPipeline(newSpansetFilter(NewStaticBool(true))),
-					newMetricsAggregate(metricsAggregateRate, nil),
-				),
+					ChainedSecondStage{newTopKBottomK(OpTopK, 10, " | ")}),
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateRate, nil), nil),
 			),
 		},
 	}
@@ -2209,26 +2180,14 @@ func TestMetricsFilter(t *testing.T) {
 			expectedStr: `{ true } | rate() > -2.5`,
 		},
 		{
-			in: `({ } | rate()) > 10`,
-			expected: &RootExpr{
-				Expr: Expr{Leaf: &ExprLeaf{
-					Pipeline:        newPipeline(newSpansetFilter(NewStaticBool(true))),
-					MetricsPipeline: newMetricsAggregate(metricsAggregateRate, nil),
-				}},
-				MetricsSecondStage: ChainedSecondStage{newMetricsFilter(OpGreater, 10, " ")},
-			},
-			expectedStr: `({ true } | rate()) > 10`,
+			in:          `({ } | rate()) > 10`,
+			expected:    chainMathSecondStage(newWrappedMetricsPipeline(newPipeline(newSpansetFilter(NewStaticBool(true))), newMetricsAggregate(metricsAggregateRate, nil), nil), ChainedSecondStage{newMetricsFilter(OpGreater, 10, " ")}),
+			expectedStr: `{ true } | rate() > 10`,
 		},
 		{
-			in: `({ } | max_over_time(duration)) > 30`,
-			expected: &RootExpr{
-				Expr: Expr{Leaf: &ExprLeaf{
-					Pipeline:        newPipeline(newSpansetFilter(NewStaticBool(true))),
-					MetricsPipeline: newMetricsAggregateWithAttr(metricsAggregateMaxOverTime, NewIntrinsic(IntrinsicDuration), nil),
-				}},
-				MetricsSecondStage: ChainedSecondStage{newMetricsFilter(OpGreater, 30, " ")},
-			},
-			expectedStr: `({ true } | max_over_time(duration)) > 30`,
+			in:          `({ } | max_over_time(duration)) > 30`,
+			expected:    chainMathSecondStage(newWrappedMetricsPipeline(newPipeline(newSpansetFilter(NewStaticBool(true))), newMetricsAggregateWithAttr(metricsAggregateMaxOverTime, NewIntrinsic(IntrinsicDuration), nil), nil), ChainedSecondStage{newMetricsFilter(OpGreater, 30, " ")}),
+			expectedStr: `{ true } | max_over_time(duration) > 30`,
 		},
 		{
 			in: `{ } | rate() > 10 with(foo="bar")`,

@@ -7,36 +7,33 @@ import (
 	"unsafe"
 )
 
-func (e Expr) String() string {
-	if !e.IsLeaf() {
-		return "(" + e.LHS.String() + ") " + e.Op.String() + " (" + e.RHS.String() + ")"
-	}
-	return e.Leaf.String()
-}
-
-func (e ExprLeaf) String() string {
-	s := strings.Builder{}
-	s.WriteString(e.Pipeline.String())
-	if e.MetricsPipeline != nil {
-		s.WriteString(" | ")
-		s.WriteString(e.MetricsPipeline.String())
-	}
-	if e.MetricsSecondStage != nil {
-		s.WriteString(e.MetricsSecondStage.String())
-	}
-	return s.String()
-}
-
 func (r RootExpr) String() string {
-	s := r.Expr.String()
-	if r.MetricsSecondStage != nil {
-		s = "(" + s + ")"
-		stage := r.MetricsSecondStage.String()
-		if len(stage) > 0 && stage[0] != ' ' && stage[0] != '|' {
-			s += " "
+	var s string
+
+	if r.hasMathSecondStage() {
+		// Math: MetricsSecondStage contains the full expression tree string.
+		s = r.MetricsSecondStage.String()
+	} else {
+		// Non-math: reconstruct from the actual pipeline + span processor content.
+		for _, p := range r.Pipeline {
+			s = p.String()
+			break
 		}
-		s += stage
+		for _, sp := range r.BatchSpanProcessor {
+			if e, ok := sp.(Element); ok {
+				s += " | " + e.String()
+			}
+			break
+		}
+		if r.MetricsSecondStage != nil {
+			stage := r.MetricsSecondStage.String()
+			if len(stage) > 0 && stage[0] != ' ' && stage[0] != '|' {
+				s += " "
+			}
+			s += stage
+		}
 	}
+
 	if r.Hints != nil {
 		s += " " + r.Hints.String()
 	}

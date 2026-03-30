@@ -353,7 +353,6 @@ type SeriesMapLabel struct {
 
 type SeriesMapKey [maxGroupBys]SeriesMapLabel
 
-var noLabelsSeriesMapKey = SeriesMapKey{}
 
 // SeriesSet is a set of unique timeseries. They are mapped by the "Prometheus"-style
 // text description: {x="a",y="b"} for convenience.
@@ -946,7 +945,7 @@ func (u *UngroupedAggregator) Series() SeriesSet {
 	}
 }
 
-func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, mode AggregateMode) (MetricsFrontendEvaluator, error) {
+func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, mode AggregateMode) (*MetricsFrontendEvaluator, error) {
 	if req.Exemplars > maxExemplars {
 		level.Warn(log.Logger).Log("msg", "capping exemplars to safety limit", "requested", req.Exemplars, "cap", maxExemplars)
 		req.Exemplars = maxExemplars
@@ -965,35 +964,32 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 		return nil, fmt.Errorf("step required")
 	}
 
-	expr, subQueries, err := CompileSubQueries(req.Query)
+	expr, err := Parse(req.Query)
 	if err != nil {
 		return nil, fmt.Errorf("compiling query: %w", err)
 	}
-
-	for i, q := range subQueries {
-		// for metrics queries, we need a metrics pipeline
-		if q.metricsPipeline == nil {
-			return nil, fmt.Errorf("not a metrics query")
-		}
-
-		q.metricsPipeline.init(req, mode)
-
-		// only run metrics second stage if we have second stage and query mode = final,
-		// as we are not sharding them now in lower layers.
-		if q.secondStage != nil && mode == AggregateModeFinal {
-			q.secondStage.init(req)
-		} else {
-			subQueries[i].secondStage = nil // set explicitly
-		}
+	if err := expr.validate(); err != nil {
+		return nil, fmt.Errorf("compiling query: %w", err)
 	}
 
+	if len(expr.BatchSpanProcessor) == 0 {
+		return nil, fmt.Errorf("not a metrics query")
+	}
+
+	// Init series processor with mode
+	expr.SeriesProcessor.init(req, mode)
+
+	// Only run second stage in final mode
 	if expr.MetricsSecondStage != nil && mode == AggregateModeFinal {
 		expr.MetricsSecondStage.init(req)
 	} else {
-		expr.MetricsSecondStage = nil // set explicitly
+		expr.MetricsSecondStage = nil
 	}
 
-	return NewMetricsFrontendEvaluator(expr, subQueries, mode), nil
+	return &MetricsFrontendEvaluator{
+		seriesProcessor:    expr.SeriesProcessor,
+		metricsSecondStage: expr.MetricsSecondStage,
+	}, nil
 }
 
 // CompileMetricsQueryRange returns an evaluator that can be reused across multiple data sources.
@@ -1016,25 +1012,35 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		return nil, fmt.Errorf("step required")
 	}
 
-	expr, subQuery, err := CompileSubQueries(req.Query)
+	expr, err := Parse(req.Query)
 	if err != nil {
 		return nil, fmt.Errorf("compiling query: %w", err)
+	}
+	if err := expr.validate(); err != nil {
+		return nil, fmt.Errorf("compiling query: %w", err)
+	}
+
+	if len(expr.BatchSpanProcessor) == 0 {
+		return nil, fmt.Errorf("not a metrics query")
 	}
 
 	needsFullTrace := expr.NeedsFullTrace()
 
-	bme := make(batchMetricsEvaluator, len(subQuery))
-	for _, q := range subQuery {
-		if q.metricsPipeline == nil {
-			return nil, fmt.Errorf("not a metrics query")
-		}
+	bme := make(batchMetricsEvaluator, len(expr.BatchSpanProcessor))
+	for key, sp := range expr.BatchSpanProcessor {
+		pipeline := expr.Pipeline[key]
+
 		// This initializes all step buffers, counters, etc
-		q.metricsPipeline.init(req, AggregateModeRaw)
-		e.applySampleHints(expr, q.Req, allowUnsafeQueryHints)
+		sp.init(req, AggregateModeRaw)
+
+		storageReq := &FetchSpansRequest{AllConditions: true}
+		pipeline.extractConditions(storageReq)
+		sp.extractConditions(storageReq)
+		e.applySampleHints(expr, storageReq, allowUnsafeQueryHints)
 
 		me := &metricsEvaluator{
-			storageReq:        q.Req,
-			metricsPipeline:   q.metricsPipeline,
+			storageReq:        storageReq,
+			metricsPipeline:   sp,
 			timeOverlapCutoff: timeOverlapCutoff,
 			maxExemplars:      int(req.Exemplars),
 			exemplarMap:       make(map[string]struct{}, req.Exemplars), // TODO: Lazy, use bloom filter, CM sketch or something
@@ -1056,15 +1062,15 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		}
 
 		// Span start time (always required)
-		if !q.Req.HasAttribute(IntrinsicSpanStartTimeAttribute) {
+		if !storageReq.HasAttribute(IntrinsicSpanStartTimeAttribute) {
 			// Technically we only need the start time of matching spans, so we add it to the second pass.
 			// However this is often optimized back to the first pass when it lets us avoid a second pass altogether.
-			q.Req.SecondPassConditions = append(q.Req.SecondPassConditions, Condition{Attribute: IntrinsicSpanStartTimeAttribute, Precision: precision})
+			storageReq.SecondPassConditions = append(storageReq.SecondPassConditions, Condition{Attribute: IntrinsicSpanStartTimeAttribute, Precision: precision})
 		} else {
 			// Update the existing condition to use low precision
-			for i, c := range q.Req.Conditions {
+			for i, c := range storageReq.Conditions {
 				if c.Attribute == IntrinsicSpanStartTimeAttribute {
-					q.Req.Conditions[i].Precision = precision
+					storageReq.Conditions[i].Precision = precision
 					break
 				}
 			}
@@ -1089,26 +1095,28 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 
 		if me.maxExemplars > 0 {
 			cb := func() bool { return me.exemplarCount < me.maxExemplars }
-			meta := ExemplarMetaConditionsWithout(cb, q.Req.SecondPassConditions, q.Req.AllConditions)
-			q.Req.SecondPassConditions = append(q.Req.SecondPassConditions, meta...)
+			meta := ExemplarMetaConditionsWithout(cb, storageReq.SecondPassConditions, storageReq.AllConditions)
+			storageReq.SecondPassConditions = append(storageReq.SecondPassConditions, meta...)
 		}
-		// Setup second pass callback.  It might be optimized away
+
+		// Setup second pass callback. It might be optimized away.
 		ssBuf := make([]*Spanset, 1)
-		q.Req.SecondPass = func(s *Spanset) ([]*Spanset, error) {
+		eval := pipeline.evaluate
+		storageReq.SecondPass = func(s *Spanset) ([]*Spanset, error) {
 			// The traceql engine isn't thread-safe.
 			// But parallelization is required for good metrics performance.
 			// So we do external locking here.
 			me.mtx.Lock()
 			defer me.mtx.Unlock()
 			ssBuf[0] = s
-			return q.eval(ssBuf)
+			return eval(ssBuf)
 		}
 
-		optimize(q.Req)
-		bme[q.Query] = me
+		optimize(storageReq)
+		bme[key] = me
 	}
 
-	if !expr.HasMathOperation() { // single, non-batched query
+	if !expr.IsMath() {
 		for k := range bme {
 			return bme[k], nil
 		}
@@ -1313,7 +1321,7 @@ type metricsEvaluator struct {
 	exemplarMap                     map[string]struct{}
 	timeOverlapCutoff               float64
 	storageReq                      *FetchSpansRequest
-	metricsPipeline                 firstStageElement
+	metricsPipeline                 spanProcessor
 	spansTotal, spansDeduped, bytes uint64
 	mtx                             sync.Mutex
 }
@@ -1606,336 +1614,36 @@ func (e *metricsEvaluator) sampleExemplar(id []byte) bool {
 	return true
 }
 
-// MetricsFrontendEvaluator pipes the sharded job results back into the engine for the rest
-// of the pipeline.  i.e. This evaluator is for the query-frontend.
-type MetricsFrontendEvaluator interface {
-	ObserveSeries([]*tempopb.TimeSeries)
-	Results() SeriesSet
-	Length() int
-}
-
-func NewMetricsFrontendEvaluator(rootExpr *RootExpr, subQueries []SubQuery, mode AggregateMode) MetricsFrontendEvaluator {
-	if !rootExpr.HasMathOperation() {
-		mfe := &singleMetricsFrontendEvaluator{
-			mtx:             sync.Mutex{},
-			metricsPipeline: subQueries[0].metricsPipeline,
-		}
-		if mode == AggregateModeFinal {
-			var secondStage ChainedSecondStage
-			if ss := rootExpr.MetricsSecondStage; ss != nil {
-				secondStage = append(secondStage, ss)
-			}
-			if ss := subQueries[0].secondStage; ss != nil {
-				secondStage = append(secondStage, ss)
-			}
-			if len(secondStage) != 0 {
-				mfe.metricsSecondStage = secondStage
-			}
-		}
-		return mfe
-	}
-
-	subQueriesM := make(map[string]SubQuery, len(subQueries))
-	for _, q := range subQueries {
-		subQueriesM[q.Query] = q
-	}
-
-	mfe := &metricsFrontendEvaluator{
-		rootExpr:   rootExpr,
-		mtx:        sync.Mutex{},
-		subQueries: subQueriesM,
-	}
-	switch mode {
-	case AggregateModeSum:
-		return &metricsFrontendEvaluatorSum{mfe}
-	case AggregateModeFinal:
-		return &metricsFrontendEvaluatorFinal{mfe}
-	default:
-		panic("unexpected mode") // should never happen
-	}
-}
-
-// singleMetricsFrontendEvaluator is used when there is only a single sub-query, so we can skip the fragmenting logic
-type singleMetricsFrontendEvaluator struct {
+// MetricsFrontendEvaluator pipes the sharded job results back into the engine
+// for the rest of the pipeline. Works uniformly for math and non-math queries.
+type MetricsFrontendEvaluator struct {
 	mtx                sync.Mutex
-	metricsPipeline    firstStageElement
+	seriesProcessor    seriesProcessor
 	metricsSecondStage secondStageElement
 }
 
-func (m *singleMetricsFrontendEvaluator) ObserveSeries(in []*tempopb.TimeSeries) {
+func (m *MetricsFrontendEvaluator) ObserveSeries(in []*tempopb.TimeSeries) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
-
-	m.metricsPipeline.observeSeries(in)
+	m.seriesProcessor.observeSeries(in)
 }
 
-func (m *singleMetricsFrontendEvaluator) Results() SeriesSet {
+func (m *MetricsFrontendEvaluator) Results() SeriesSet {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
-
-	// Job results are not scaled by sampling, but this is here for the interface.
-	results := m.metricsPipeline.result(1.0)
-
+	results := m.seriesProcessor.result(1.0)
 	if m.metricsSecondStage != nil {
-		// metrics second stage is only set when query has second stage function and mode = final
-		// if we have metrics second stage, pass first stage results through
-		// second stage for further processing.
 		results = m.metricsSecondStage.process(results)
 	}
-
 	return results
 }
 
-func (m *singleMetricsFrontendEvaluator) Length() int {
+func (m *MetricsFrontendEvaluator) Length() int {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
-
-	return m.metricsPipeline.length()
+	return m.seriesProcessor.length()
 }
 
-type metricsFrontendEvaluatorFinal struct {
-	*metricsFrontendEvaluator
-}
-
-type metricsFrontendEvaluatorSum struct {
-	*metricsFrontendEvaluator
-}
-
-type metricsFrontendEvaluator struct {
-	rootExpr   *RootExpr
-	mtx        sync.Mutex
-	subQueries map[string]SubQuery
-}
-
-func (m *metricsFrontendEvaluator) ObserveSeries(in []*tempopb.TimeSeries) {
-	m.mtx.Lock()
-	defer m.mtx.Unlock()
-
-	fragments := make(map[string][]*tempopb.TimeSeries, len(m.subQueries))
-	for _, ts := range in {
-		for _, label := range ts.Labels {
-			if label.GetKey() == internalLabelQueryFragment {
-				fragmentKey := label.GetValue().GetStringValue()
-				fragments[fragmentKey] = append(fragments[fragmentKey], ts)
-				break
-			}
-		}
-	}
-	for k, v := range fragments {
-		if q := m.subQueries[k]; q.metricsPipeline != nil {
-			q.metricsPipeline.observeSeries(v)
-		}
-	}
-}
-
-func (m *metricsFrontendEvaluator) Length() int {
-	m.mtx.Lock()
-	defer m.mtx.Unlock()
-
-	var length int
-	for _, q := range m.subQueries {
-		length += q.metricsPipeline.length()
-	}
-	return length
-}
-
-func (m *metricsFrontendEvaluator) processSubQuery(q SubQuery) SeriesSet {
-	// Job results are not scaled by sampling, but this is here for the interface.
-	results := q.metricsPipeline.result(1.0)
-
-	if q.secondStage != nil {
-		// metrics second stage is only set when query has second stage function and mode = final
-		// if we have metrics second stage, pass first stage results through
-		// second stage for further processing.
-		results = q.secondStage.process(results)
-	}
-	return results
-}
-
-func (m *metricsFrontendEvaluatorSum) Results() SeriesSet {
-	m.mtx.Lock()
-	defer m.mtx.Unlock()
-
-	total := 0
-	for _, q := range m.subQueries {
-		total += q.metricsPipeline.length()
-	}
-	result := make(SeriesSet, total)
-	for _, q := range m.subQueries {
-		for k, v := range m.processSubQuery(q) {
-			result[k] = v
-		}
-	}
-	return result
-}
-
-func (m *metricsFrontendEvaluatorFinal) Results() SeriesSet {
-	m.mtx.Lock()
-	defer m.mtx.Unlock()
-
-	fragments := make(map[string]SeriesSet, len(m.subQueries))
-	fragmentNames := make(map[string]string, len(m.subQueries))
-	for k, q := range m.subQueries {
-		results := m.processSubQuery(q)
-		fragment := make(SeriesSet, len(results))
-		for smk, v := range results {
-			key := SeriesMapKey{}
-			j := 0
-			for i := range smk {
-				if smk[i].Name == labels.MetricName || smk[i].Name == internalLabelQueryFragment {
-					continue
-				}
-				key[j] = smk[i]
-				j++
-			}
-			n := 0
-			for _, l := range v.Labels {
-				if l.Name == labels.MetricName {
-					fragmentNames[k] = l.Value.EncodeToString(false)
-					continue
-				}
-				if l.Name != internalLabelQueryFragment {
-					v.Labels[n] = l // to avoid reallocation we reuse the slice
-					n++
-				}
-			}
-			v.Labels = v.Labels[:n]
-			fragment[key] = v
-		}
-		fragments[k] = fragment
-	}
-
-	result := evaluateMathExpr(&m.rootExpr.Expr, fragments)
-
-	combinedName := buildMetricName(&m.rootExpr.Expr, fragmentNames)
-
-	// Re-key by full labels so the output SeriesSet is consistent.
-	out := make(SeriesSet, len(result))
-	for _, v := range result {
-		if combinedName != "" {
-			v.Labels = append(Labels{Label{Name: labels.MetricName, Value: NewStaticString(combinedName)}}, v.Labels...)
-		}
-		out[v.Labels.MapKey()] = v
-	}
-	// apply second stage on final results
-	if secondStage := m.metricsFrontendEvaluator.rootExpr.MetricsSecondStage; secondStage != nil {
-		out = secondStage.process(out)
-	}
-	return out
-}
-
-func evaluateMathExpr(e *Expr, fragments map[string]SeriesSet) SeriesSet {
-	if e.IsLeaf() {
-		return fragments[e.Leaf.String()]
-	}
-	lhs := evaluateMathExpr(e.LHS, fragments)
-	rhs := evaluateMathExpr(e.RHS, fragments)
-	return applyBinaryOp(e.Op, lhs, rhs)
-}
-
-// buildMetricName constructs a combined __name__ from the expression tree.
-// Returns "" if any leaf has no __name__ (e.g. grouped aggregator).
-func buildMetricName(e *Expr, names map[string]string) string {
-	if e.IsLeaf() {
-		return names[e.Leaf.String()]
-	}
-	lhs := buildMetricName(e.LHS, names)
-	rhs := buildMetricName(e.RHS, names)
-	if lhs == "" || rhs == "" {
-		return ""
-	}
-	return fmt.Sprintf("(%s %s %s)", lhs, e.Op.String(), rhs)
-}
-
-func applyBinaryOp(op Operator, lhs, rhs SeriesSet) SeriesSet {
-	target := lhs
-	if _, ok := rhs[noLabelsSeriesMapKey]; !ok {
-		target = rhs
-	}
-
-	result := make(SeriesSet, len(target))
-
-	// pre-allocate array once to avoid multiple smaller allocations
-	var valuesLen int
-	for _, t := range target {
-		valuesLen += len(t.Values)
-	}
-	buf := make([]float64, valuesLen)
-	var offset int
-
-	for k := range target {
-		l, lOk := getTSMatch(lhs, k)
-		r, rOk := getTSMatch(rhs, k)
-		if !lOk || !rOk {
-			continue
-		}
-
-		n := min(len(r.Values), len(l.Values))
-		values := buf[offset : offset+n]
-		for j := 0; j < n; j++ {
-			values[j] = applyArithmeticOp(op, l.Values[j], r.Values[j])
-		}
-		labels := l.Labels
-		if len(labels) == 0 {
-			labels = r.Labels
-		}
-
-		result[k] = TimeSeries{
-			Labels:    labels,
-			Values:    values,
-			Exemplars: mergeExemplars(l.Exemplars, r.Exemplars),
-		}
-		offset += n
-	}
-	return result
-}
-
-func getTSMatch(set SeriesSet, key SeriesMapKey) (TimeSeries, bool) {
-	if s, ok := set[key]; ok {
-		return s, true
-	}
-	if s, ok := set[noLabelsSeriesMapKey]; ok {
-		return s, true
-	}
-	return TimeSeries{}, false
-}
-
-func mergeExemplars(a, b []Exemplar) []Exemplar {
-	if len(a) == 0 {
-		return b
-	}
-	if len(b) == 0 {
-		return a
-	}
-	result := make([]Exemplar, 0, len(a)+len(b))
-	result = append(result, a...)
-	result = append(result, b...)
-	return result
-}
-
-func applyArithmeticOp(op Operator, lhs, rhs float64) float64 {
-	if math.IsNaN(lhs) {
-		lhs = 0
-	}
-	if math.IsNaN(rhs) {
-		rhs = 0
-	}
-	switch op {
-	case OpAdd:
-		return lhs + rhs
-	case OpSub:
-		return lhs - rhs
-	case OpMult:
-		return lhs * rhs
-	case OpDiv:
-		if rhs == 0 {
-			return math.NaN()
-		}
-		return lhs / rhs
-	default:
-		return math.NaN()
-	}
-}
 
 type SeriesAggregator interface {
 	Combine([]*tempopb.TimeSeries)
