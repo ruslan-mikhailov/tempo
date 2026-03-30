@@ -353,7 +353,6 @@ type SeriesMapLabel struct {
 
 type SeriesMapKey [maxGroupBys]SeriesMapLabel
 
-
 // SeriesSet is a set of unique timeseries. They are mapped by the "Prometheus"-style
 // text description: {x="a",y="b"} for convenience.
 type SeriesSet map[SeriesMapKey]TimeSeries
@@ -977,7 +976,8 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 	}
 
 	// Init series processor with mode
-	expr.SeriesProcessor.init(req, mode)
+	sp := batchSeriesProcessor(expr.SeriesProcessor)
+	sp.init(req, mode)
 
 	// Only run second stage in final mode
 	if expr.MetricsSecondStage != nil && mode == AggregateModeFinal {
@@ -987,7 +987,7 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 	}
 
 	return &MetricsFrontendEvaluator{
-		seriesProcessor:    expr.SeriesProcessor,
+		seriesProcessor:    sp,
 		metricsSecondStage: expr.MetricsSecondStage,
 	}, nil
 }
@@ -1643,7 +1643,6 @@ func (m *MetricsFrontendEvaluator) Length() int {
 	defer m.mtx.Unlock()
 	return m.seriesProcessor.length()
 }
-
 
 type SeriesAggregator interface {
 	Combine([]*tempopb.TimeSeries)
