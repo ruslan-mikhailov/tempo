@@ -42,26 +42,6 @@ type RootExpr struct {
 	OptimizationCount  int
 }
 
-// IsMath returns true if the expression involves binary arithmetic between
-// metrics sub-queries (even if deduplicated to a single sub-query).
-// TODO: should go away
-func (r *RootExpr) IsMath() bool {
-	return r != nil && r.hasMathSecondStage()
-}
-
-// TODO: should go away
-func (r RootExpr) hasMathSecondStage() bool {
-	if m, ok := r.MetricsSecondStage.(*mathExpression); ok {
-		return m.op != OpNone // leaf mathExpression is not "math"
-	}
-	if cs, ok := r.MetricsSecondStage.(ChainedSecondStage); ok && len(cs) > 0 {
-		if m, ok := cs[0].(*mathExpression); ok {
-			return m.op != OpNone
-		}
-	}
-	return false
-}
-
 // SinglePipeline returns the pipeline and span processor when there is exactly
 // one sub-query (non-math). Returns false for math expressions.
 func (r *RootExpr) SinglePipeline() (Pipeline, spanProcessor, bool) {

@@ -8,36 +8,35 @@ import (
 )
 
 func (r RootExpr) String() string {
-	var s string
+	s := strings.Builder{}
 
-	if r.hasMathSecondStage() {
-		// Math: MetricsSecondStage contains the full expression tree string.
-		s = r.MetricsSecondStage.String()
+	if _, ok := r.MetricsSecondStage.(*mathExpression); ok {
+		// for math it includes the full expression tree, for leaf mathExpression it includes the fragment key
+		// (pipeline + processor string) plus any filter.
+		s.WriteString(r.MetricsSecondStage.String())
 	} else {
-		// Non-math: reconstruct from the actual pipeline + span processor content.
+		// Non-metrics query: reconstruct from the pipeline content.
 		for _, p := range r.Pipeline {
-			s = p.String()
+			s.WriteString(p.String())
 			break
 		}
 		for _, sp := range r.BatchSpanProcessor {
 			if e, ok := sp.(Element); ok {
-				s += " | " + e.String()
+				s.WriteString(" | ")
+				s.WriteString(e.String())
 			}
 			break
 		}
 		if r.MetricsSecondStage != nil {
-			stage := r.MetricsSecondStage.String()
-			if len(stage) > 0 && stage[0] != ' ' && stage[0] != '|' {
-				s += " "
-			}
-			s += stage
+			s.WriteString(r.MetricsSecondStage.String())
 		}
 	}
 
 	if r.Hints != nil {
-		s += " " + r.Hints.String()
+		s.WriteString(" ")
+		s.WriteString(r.Hints.String())
 	}
-	return s
+	return s.String()
 }
 
 func (p Pipeline) String() string {
