@@ -29,6 +29,14 @@ type mathExpression struct {
 
 var _ secondStageElement = (*mathExpression)(nil)
 
+func newFlatExpression(key string, filter secondStageElement) *mathExpression {
+	return &mathExpression{
+		op:     OpNone,
+		key:    key,
+		filter: filter,
+	}
+}
+
 func (m *mathExpression) String() string {
 	if m.op == OpNone {
 		s := m.key

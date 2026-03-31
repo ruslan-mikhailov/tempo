@@ -989,15 +989,15 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 	sp.init(req, mode)
 
 	// Only run second stage in final mode
-	if expr.MetricsSecondStage != nil && mode == AggregateModeFinal {
-		expr.MetricsSecondStage.init(req)
-	} else {
-		expr.MetricsSecondStage = nil
+	var secondStage secondStageElement
+	if ss := expr.MetricsSecondStage(); ss != nil && mode == AggregateModeFinal {
+		ss.init(req)
+		secondStage = ss
 	}
 
 	return &MetricsFrontendEvaluator{
 		seriesProcessor:    sp,
-		metricsSecondStage: expr.MetricsSecondStage,
+		metricsSecondStage: secondStage,
 	}, nil
 }
 

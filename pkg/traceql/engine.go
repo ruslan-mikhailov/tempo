@@ -48,7 +48,7 @@ func Compile(query string) (*RootExpr, SpansetFilterFunc, spanProcessor, secondS
 	if sp != nil {
 		sp.extractConditions(req)
 	}
-	return expr, p.evaluate, sp, expr.MetricsSecondStage, req, nil
+	return expr, p.evaluate, sp, expr.MetricsSecondStage(), req, nil
 }
 
 // CompileSubQueries parses a query and returns per-sub-query FetchSpansRequests.

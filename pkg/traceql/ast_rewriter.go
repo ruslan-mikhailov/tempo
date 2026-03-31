@@ -69,7 +69,7 @@ func (f *fieldExpressionRewriter) RewriteRoot(r *RootExpr) *RootExpr {
 		Pipeline:           newPipelines,
 		BatchSpanProcessor: r.BatchSpanProcessor,
 		SeriesProcessor:    r.SeriesProcessor,
-		MetricsSecondStage: r.MetricsSecondStage,
+		expression:         r.expression,
 		Hints:              r.Hints,
 		OptimizationCount:  r.OptimizationCount + totalCount,
 	}

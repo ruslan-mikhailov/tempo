@@ -34,16 +34,16 @@ type typedExpression interface {
 // (keyed by fragment string), a single SeriesProcessor for L2/L3 evaluation,
 // and a MetricsSecondStage that may include a mathExpression tree.
 type RootExpr struct {
-	Pipeline           map[string]Pipeline        // per-sub-query spanset filters
-	BatchSpanProcessor map[string]spanProcessor   // L1: per-sub-query span processing
-	SeriesProcessor    map[string]seriesProcessor // L2/L3: routes internally if math
-	MetricsSecondStage secondStageElement         // Final: mathExpression + topk/filter chain
+	Pipeline           map[string]Pipeline        // spanset filters
+	BatchSpanProcessor map[string]spanProcessor   // span processing
+	SeriesProcessor    map[string]seriesProcessor // time series processing
+	expression         *mathExpression            // query expression structure
 	Hints              *Hints
 	OptimizationCount  int
 }
 
 // SinglePipeline returns the pipeline and span processor when there is exactly
-// one sub-query (non-math). Returns false for math expressions.
+// one sub-query. Returns false for math expressions.
 func (r *RootExpr) SinglePipeline() (Pipeline, spanProcessor, bool) {
 	if len(r.Pipeline) > 0 && len(r.BatchSpanProcessor) > 0 {
 		return Pipeline{}, nil, false
@@ -55,6 +55,10 @@ func (r *RootExpr) SinglePipeline() (Pipeline, spanProcessor, bool) {
 		return p, nil, true
 	}
 	return Pipeline{}, nil, false
+}
+
+func (r *RootExpr) MetricsSecondStage() secondStageElement {
+	return r.expression
 }
 
 func NeedsFullTrace(e ...Element) bool {
@@ -113,7 +117,8 @@ func newRootExpr(e PipelineElement) *RootExpr {
 
 	key := subQueryKey(p, nil, nil)
 	return &RootExpr{
-		Pipeline: map[string]Pipeline{key: p},
+		Pipeline:   map[string]Pipeline{key: p},
+		expression: newFlatExpression(key, nil),
 	}
 }
 
@@ -128,6 +133,7 @@ func newRootExprWithMetrics(e PipelineElement, m firstStageElement) *RootExpr {
 		Pipeline:           map[string]Pipeline{key: p},
 		BatchSpanProcessor: map[string]spanProcessor{key: m},
 		SeriesProcessor:    map[string]seriesProcessor{key: m},
+		expression:         newFlatExpression(key, nil),
 	}
 }
 
@@ -142,7 +148,7 @@ func newRootExprWithMetricsTwoStage(e PipelineElement, m1 firstStageElement, m2 
 		Pipeline:           map[string]Pipeline{key: p},
 		BatchSpanProcessor: map[string]spanProcessor{key: m1},
 		SeriesProcessor:    map[string]seriesProcessor{key: m1},
-		MetricsSecondStage: m2,
+		expression:         newFlatExpression(key, m2),
 	}
 }
 
@@ -174,10 +180,10 @@ func newRootExprMath(op Operator, lhs, rhs *RootExpr) *RootExpr {
 		Pipeline:           pipelines,
 		BatchSpanProcessor: spanProcs,
 		SeriesProcessor:    seriesProcs,
-		MetricsSecondStage: &mathExpression{
+		expression: &mathExpression{
 			op:  op,
-			lhs: asMathExpression(lhs.MetricsSecondStage),
-			rhs: asMathExpression(rhs.MetricsSecondStage),
+			lhs: asMathExpression(lhs.expression),
+			rhs: asMathExpression(rhs.expression),
 		},
 	}
 }
@@ -206,7 +212,7 @@ func newWrappedMetricsPipeline(e PipelineElement, m1 firstStageElement, m2 secon
 		Pipeline:           map[string]Pipeline{key: p},
 		BatchSpanProcessor: map[string]spanProcessor{key: m1},
 		SeriesProcessor:    map[string]seriesProcessor{key: m1},
-		MetricsSecondStage: &mathExpression{op: OpNone, key: key, filter: m2},
+		expression:         newFlatExpression(key, m2),
 	}
 }
 
@@ -214,10 +220,10 @@ func chainMathSecondStage(r *RootExpr, stage ChainedSecondStage) *RootExpr {
 	if len(stage) == 0 {
 		return r
 	}
-	if r.MetricsSecondStage == nil {
-		r.MetricsSecondStage = stage
+	if r.expression.filter == nil {
+		r.expression.filter = stage
 	} else {
-		r.MetricsSecondStage = append(ChainedSecondStage{r.MetricsSecondStage}, stage...)
+		r.expression.filter = append(ChainedSecondStage{r.expression.filter}, stage...)
 	}
 	return r
 }

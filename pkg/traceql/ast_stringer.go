@@ -10,27 +10,7 @@ import (
 func (r RootExpr) String() string {
 	s := strings.Builder{}
 
-	if _, ok := r.MetricsSecondStage.(*mathExpression); ok {
-		// for math it includes the full expression tree, for leaf mathExpression it includes the fragment key
-		// (pipeline + processor string) plus any filter.
-		s.WriteString(r.MetricsSecondStage.String())
-	} else {
-		// Non-metrics query: reconstruct from the pipeline content.
-		for _, p := range r.Pipeline {
-			s.WriteString(p.String())
-			break
-		}
-		for _, sp := range r.BatchSpanProcessor {
-			if e, ok := sp.(Element); ok {
-				s.WriteString(" | ")
-				s.WriteString(e.String())
-			}
-			break
-		}
-		if r.MetricsSecondStage != nil {
-			s.WriteString(r.MetricsSecondStage.String())
-		}
-	}
+	s.WriteString(r.expression.String())
 
 	if r.Hints != nil {
 		s.WriteString(" ")
