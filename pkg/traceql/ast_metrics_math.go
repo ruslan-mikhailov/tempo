@@ -29,6 +29,22 @@ type mathExpression struct {
 
 var _ secondStageElement = (*mathExpression)(nil)
 
+func (m *mathExpression) rewriteKeys(keyMap map[string]string) *mathExpression {
+	if m == nil {
+		return nil
+	}
+	cp := *m
+	if m.op == OpNone {
+		if newKey, ok := keyMap[m.key]; ok {
+			cp.key = newKey
+		}
+	} else {
+		cp.lhs = m.lhs.rewriteKeys(keyMap)
+		cp.rhs = m.rhs.rewriteKeys(keyMap)
+	}
+	return &cp
+}
+
 func newFlatExpression(key string, filter secondStageElement) *mathExpression {
 	return &mathExpression{
 		op:     OpNone,
@@ -38,41 +54,44 @@ func newFlatExpression(key string, filter secondStageElement) *mathExpression {
 }
 
 func (m *mathExpression) String() string {
+	var s string
 	if m.op == OpNone {
-		s := m.key
-		if m.filter != nil {
-			s += m.filter.String()
-		}
-		return s
+		s = m.key
+	} else {
+		s = "(" + m.lhs.String() + ") " + m.op.String() + " (" + m.rhs.String() + ")"
 	}
-	return "(" + m.lhs.String() + ") " + m.op.String() + " (" + m.rhs.String() + ")"
+	if m.filter != nil {
+		s += m.filter.String()
+	}
+	return s
 }
 
 func (m *mathExpression) validate() error {
-	if m.op == OpNone {
-		if m.filter != nil {
-			return m.filter.validate()
+	if m.op != OpNone {
+		if !m.op.isArithmetic() {
+			return fmt.Errorf("unsupported math operation between queries: %s", m.op)
 		}
-		return nil
+		if err := m.lhs.validate(); err != nil {
+			return err
+		}
+		if err := m.rhs.validate(); err != nil {
+			return err
+		}
 	}
-	if !m.op.isArithmetic() {
-		return fmt.Errorf("unsupported math operation between queries: %s", m.op)
+	if m.filter != nil {
+		return m.filter.validate()
 	}
-	if err := m.lhs.validate(); err != nil {
-		return err
-	}
-	return m.rhs.validate()
+	return nil
 }
 
 func (m *mathExpression) init(req *tempopb.QueryRangeRequest) {
-	if m.op == OpNone {
-		if m.filter != nil {
-			m.filter.init(req)
-		}
-		return
+	if m.op != OpNone {
+		m.lhs.init(req)
+		m.rhs.init(req)
 	}
-	m.lhs.init(req)
-	m.rhs.init(req)
+	if m.filter != nil {
+		m.filter.init(req)
+	}
 }
 
 func (m *mathExpression) separator() string {
@@ -94,9 +113,6 @@ func (m *mathExpression) process(input SeriesSet) SeriesSet {
 	rhs := m.rhs.process(input)
 
 	result := applyBinaryOp(m.op, lhs, rhs)
-	if m.filter != nil {
-		result = m.filter.process(result)
-	}
 
 	// Build combined __name__ label from children.
 	combinedName := ""
@@ -111,6 +127,9 @@ func (m *mathExpression) process(input SeriesSet) SeriesSet {
 			v.Labels = append(Labels{Label{Name: labels.MetricName, Value: NewStaticString(combinedName)}}, v.Labels...)
 		}
 		out[v.Labels.MapKey()] = v
+	}
+	if m.filter != nil {
+		out = m.filter.process(out)
 	}
 	return out
 }
@@ -146,36 +165,55 @@ func (m *mathExpression) metricName(input SeriesSet) string {
 // processLeaf extracts series matching this leaf's __query_fragment key,
 // strips internal labels, and optionally applies a per-leaf filter.
 func (m *mathExpression) processLeaf(input SeriesSet) SeriesSet {
-	result := make(SeriesSet, len(input))
-	for smk, v := range input {
-		// Match by __query_fragment
-		fragmentValue := v.Labels.GetValue(internalLabelQueryFragment)
-		if fragmentValue.Type != TypeString || fragmentValue.EncodeToString(false) != m.key {
-			continue
+	// Check if series have __query_fragment labels (math query with routing)
+	hasFragment := false
+	for _, v := range input {
+		if fv := v.Labels.GetValue(internalLabelQueryFragment); fv.Type == TypeString {
+			hasFragment = true
+			break
 		}
+	}
 
-		// Build new key without __query_fragment and __name__
-		key := SeriesMapKey{}
-		j := 0
-		for i := range smk {
-			if smk[i].Name == labels.MetricName || smk[i].Name == internalLabelQueryFragment {
+	var result SeriesSet
+	if hasFragment {
+		result = make(SeriesSet, len(input))
+		for smk, v := range input {
+			// Match by __query_fragment
+			fv := v.Labels.GetValue(internalLabelQueryFragment)
+			if fv.Type != TypeString || fv.EncodeToString(false) != m.key {
 				continue
 			}
-			key[j] = smk[i]
-			j++
-		}
 
-		// Strip __query_fragment and __name__ from labels
-		n := 0
-		for _, l := range v.Labels {
-			if l.Name != labels.MetricName && l.Name != internalLabelQueryFragment {
-				v.Labels[n] = l
-				n++
+			// Build new key without __query_fragment and __name__
+			key := SeriesMapKey{}
+			j := 0
+			for i := range smk {
+				if smk[i].Name == labels.MetricName || smk[i].Name == internalLabelQueryFragment {
+					continue
+				}
+				key[j] = smk[i]
+				j++
+			}
+
+			// Copy the series — must not mutate input since other leaves
+			// may read the same series from the shared input.
+			stripped := make(Labels, 0, len(v.Labels))
+			for _, l := range v.Labels {
+				if l.Name != labels.MetricName && l.Name != internalLabelQueryFragment {
+					stripped = append(stripped, l)
+				}
+			}
+			values := make([]float64, len(v.Values))
+			copy(values, v.Values)
+			result[key] = TimeSeries{
+				Labels:    stripped,
+				Values:    values,
+				Exemplars: v.Exemplars,
 			}
 		}
-		v.Labels = v.Labels[:n]
-
-		result[key] = v
+	} else {
+		// Single query: no routing, pass through as-is
+		result = input
 	}
 
 	if m.filter != nil {

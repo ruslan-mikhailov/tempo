@@ -39,8 +39,8 @@ func (r RootExpr) validate() error {
 		}
 	}
 
-	// Disallow compare() with second stage functions
-	if r.MetricsSecondStage() != nil {
+	// Disallow compare() with second stage functions or math.
+	if r.expression != nil && (r.expression.filter != nil || r.expression.op != OpNone) {
 		for _, sp := range r.BatchSpanProcessor {
 			if _, ok := sp.(*MetricsCompare); ok {
 				return fmt.Errorf("`compare()` cannot be used with second stage functions")

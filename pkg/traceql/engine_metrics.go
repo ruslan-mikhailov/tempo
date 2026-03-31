@@ -1125,7 +1125,7 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		bme[key] = me
 	}
 
-	if len(bme) == 1 {
+	if len(bme) == 1 && expr.IsFlat() {
 		for _, me := range bme {
 			return me, nil
 		}

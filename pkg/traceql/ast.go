@@ -43,9 +43,9 @@ type RootExpr struct {
 }
 
 // SinglePipeline returns the pipeline and span processor when there is exactly
-// one sub-query. Returns false for math expressions.
+// one sub-query. Returns false for math expressions (multiple pipelines).
 func (r *RootExpr) SinglePipeline() (Pipeline, spanProcessor, bool) {
-	if len(r.Pipeline) > 0 && len(r.BatchSpanProcessor) > 0 {
+	if len(r.Pipeline) != 1 {
 		return Pipeline{}, nil, false
 	}
 	for _, p := range r.Pipeline {
@@ -59,6 +59,10 @@ func (r *RootExpr) SinglePipeline() (Pipeline, spanProcessor, bool) {
 
 func (r *RootExpr) MetricsSecondStage() secondStageElement {
 	return r.expression
+}
+
+func (r *RootExpr) IsFlat() bool {
+	return r.expression.op == OpNone
 }
 
 func NeedsFullTrace(e ...Element) bool {
@@ -98,13 +102,11 @@ func (r *RootExpr) NeedsFullTrace() bool {
 	return false
 }
 
-func subQueryKey(p Pipeline, m1 firstStageElement, m2 secondStageElement) string {
+// subQueryKey is used to route time series
+func subQueryKey(p Pipeline, m1 firstStageElement) string {
 	key := p.String()
 	if m1 != nil {
 		key += " | " + m1.String()
-	}
-	if m2 != nil {
-		key += m2.String()
 	}
 	return key
 }
@@ -115,7 +117,7 @@ func newRootExpr(e PipelineElement) *RootExpr {
 		p = newPipeline(e)
 	}
 
-	key := subQueryKey(p, nil, nil)
+	key := subQueryKey(p, nil)
 	return &RootExpr{
 		Pipeline:   map[string]Pipeline{key: p},
 		expression: newFlatExpression(key, nil),
@@ -128,7 +130,7 @@ func newRootExprWithMetrics(e PipelineElement, m firstStageElement) *RootExpr {
 		p = newPipeline(e)
 	}
 
-	key := subQueryKey(p, m, nil)
+	key := subQueryKey(p, m)
 	return &RootExpr{
 		Pipeline:           map[string]Pipeline{key: p},
 		BatchSpanProcessor: map[string]spanProcessor{key: m},
@@ -143,7 +145,7 @@ func newRootExprWithMetricsTwoStage(e PipelineElement, m1 firstStageElement, m2 
 		p = newPipeline(e)
 	}
 
-	key := subQueryKey(p, m1, m2)
+	key := subQueryKey(p, m1)
 	return &RootExpr{
 		Pipeline:           map[string]Pipeline{key: p},
 		BatchSpanProcessor: map[string]spanProcessor{key: m1},
@@ -207,7 +209,7 @@ func newWrappedMetricsPipeline(e PipelineElement, m1 firstStageElement, m2 secon
 		p = newPipeline(e)
 	}
 
-	key := subQueryKey(p, m1, m2)
+	key := subQueryKey(p, m1)
 	return &RootExpr{
 		Pipeline:           map[string]Pipeline{key: p},
 		BatchSpanProcessor: map[string]spanProcessor{key: m1},
