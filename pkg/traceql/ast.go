@@ -230,20 +230,6 @@ func newWrappedMetricsPipeline(e PipelineElement, m1 firstStageElement, m2 secon
 	}
 }
 
-// unwrapSingleMathExpr is called when a metricsExpression is used as the root.
-// If it's a single wrapped pipeline (no binary ops), unwrap back to a plain
-// non-math RootExpr. Otherwise, keep the math structure.
-func unwrapSingleMathExpr(r *RootExpr) *RootExpr {
-	if !r.IsMath() {
-		// Single entry — drop the leaf mathExpression, keep any per-leaf filter
-		// as the root MetricsSecondStage.
-		if m, ok := r.MetricsSecondStage.(*mathExpression); ok && m.op == OpNone {
-			r.MetricsSecondStage = m.filter // nil if no per-leaf second stage
-		}
-	}
-	return r
-}
-
 func chainMathSecondStage(r *RootExpr, stage ChainedSecondStage) *RootExpr {
 	if len(stage) == 0 {
 		return r

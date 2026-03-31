@@ -1030,7 +1030,7 @@ yydefault:
 	case 6:
 		yyDollar = yyS[yypt-1 : yypt+1]
 		{
-			yylex.(*lexer).expr = unwrapSingleMathExpr(yyDollar[1].metricsExpression)
+			yylex.(*lexer).expr = yyDollar[1].metricsExpression
 		}
 	case 7:
 		yyDollar = yyS[yypt-2 : yypt+1]
