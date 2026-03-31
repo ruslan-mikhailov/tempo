@@ -96,7 +96,7 @@ func (s *MCPServer) handleSearch(ctx context.Context, request mcp.CallToolReques
 
 	// if has sub-queries or has metrics pipelines, not a valid query
 	leaf, isLeaf := parsed.SingleExpression()
-	if !isLeaf || leaf.MetricsPipeline != nil || leaf.MetricsSecondStage != nil {
+	if !isLeaf || leaf.MetricsPipeline != nil {
 		return mcp.NewToolResultError("TraceQL metrics query received on traceql-search tool. Use the traceql-metrics-instant or traceql-metrics-range tool instead"), nil
 	}
 

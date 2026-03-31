@@ -45,7 +45,7 @@ func Compile(query string) (*RootExpr, SpansetFilterFunc, firstStageElement, sec
 	}
 	req := &FetchSpansRequest{AllConditions: true}
 	leaf.extractConditions(req)
-	return expr, leaf.Pipeline.evaluate, leaf.MetricsPipeline, leaf.MetricsSecondStage, req, nil
+	return expr, leaf.Pipeline.evaluate, leaf.MetricsPipeline, expr.Expr.SecondStage, req, nil
 }
 
 type SubQuery struct {
@@ -53,7 +53,6 @@ type SubQuery struct {
 	Req             *FetchSpansRequest
 	eval            SpansetFilterFunc
 	metricsPipeline firstStageElement
-	secondStage     secondStageElement
 }
 
 func CompileSubQueries(query string) (*RootExpr, []SubQuery, error) {
@@ -69,16 +68,15 @@ func CompileSubQueries(query string) (*RootExpr, []SubQuery, error) {
 
 	leaves := expr.Expr.CollectLeaves()
 	subQueries := make([]SubQuery, 0, len(leaves))
-	for _, leaf := range leaves {
+	for _, e := range leaves {
 		req := &FetchSpansRequest{
 			AllConditions: true,
 		}
-		leaf.extractConditions(req)
+		e.Leaf.extractConditions(req)
 		subQueries = append(subQueries, SubQuery{
-			Query:           leaf.String(),
-			eval:            leaf.Pipeline.evaluate,
-			metricsPipeline: leaf.MetricsPipeline,
-			secondStage:     leaf.MetricsSecondStage,
+			Query:           e.String(),
+			eval:            e.Leaf.Pipeline.evaluate,
+			metricsPipeline: e.Leaf.MetricsPipeline,
 			Req:             req,
 		})
 	}

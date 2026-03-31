@@ -2211,24 +2211,28 @@ func TestMetricsFilter(t *testing.T) {
 		{
 			in: `({ } | rate()) > 10`,
 			expected: &RootExpr{
-				Expr: Expr{Leaf: &ExprLeaf{
-					Pipeline:        newPipeline(newSpansetFilter(NewStaticBool(true))),
-					MetricsPipeline: newMetricsAggregate(metricsAggregateRate, nil),
-				}},
-				MetricsSecondStage: ChainedSecondStage{newMetricsFilter(OpGreater, 10, " ")},
+				Expr: Expr{
+					Leaf: &ExprLeaf{
+						Pipeline:        newPipeline(newSpansetFilter(NewStaticBool(true))),
+						MetricsPipeline: newMetricsAggregate(metricsAggregateRate, nil),
+					},
+					SecondStage: ChainedSecondStage{newMetricsFilter(OpGreater, 10, " ")},
+				},
 			},
-			expectedStr: `({ true } | rate()) > 10`,
+			expectedStr: `{ true } | rate() > 10`,
 		},
 		{
 			in: `({ } | max_over_time(duration)) > 30`,
 			expected: &RootExpr{
-				Expr: Expr{Leaf: &ExprLeaf{
-					Pipeline:        newPipeline(newSpansetFilter(NewStaticBool(true))),
-					MetricsPipeline: newMetricsAggregateWithAttr(metricsAggregateMaxOverTime, NewIntrinsic(IntrinsicDuration), nil),
-				}},
-				MetricsSecondStage: ChainedSecondStage{newMetricsFilter(OpGreater, 30, " ")},
+				Expr: Expr{
+					Leaf: &ExprLeaf{
+						Pipeline:        newPipeline(newSpansetFilter(NewStaticBool(true))),
+						MetricsPipeline: newMetricsAggregateWithAttr(metricsAggregateMaxOverTime, NewIntrinsic(IntrinsicDuration), nil),
+					},
+					SecondStage: ChainedSecondStage{newMetricsFilter(OpGreater, 30, " ")},
+				},
 			},
-			expectedStr: `({ true } | max_over_time(duration)) > 30`,
+			expectedStr: `{ true } | max_over_time(duration) > 30`,
 		},
 		{
 			in: `{ } | rate() > 10 with(foo="bar")`,

@@ -8,10 +8,16 @@ import (
 )
 
 func (e Expr) String() string {
+	var s string
 	if !e.IsLeaf() {
-		return "(" + e.LHS.String() + ") " + e.Op.String() + " (" + e.RHS.String() + ")"
+		s = "(" + e.LHS.String() + ") " + e.Op.String() + " (" + e.RHS.String() + ")"
+	} else {
+		s = e.Leaf.String()
 	}
-	return e.Leaf.String()
+	if e.SecondStage != nil {
+		s += e.SecondStage.String()
+	}
+	return s
 }
 
 func (e ExprLeaf) String() string {
@@ -21,22 +27,11 @@ func (e ExprLeaf) String() string {
 		s.WriteString(" | ")
 		s.WriteString(e.MetricsPipeline.String())
 	}
-	if e.MetricsSecondStage != nil {
-		s.WriteString(e.MetricsSecondStage.String())
-	}
 	return s.String()
 }
 
 func (r RootExpr) String() string {
 	s := r.Expr.String()
-	if r.MetricsSecondStage != nil {
-		s = "(" + s + ")"
-		stage := r.MetricsSecondStage.String()
-		if len(stage) > 0 && stage[0] != ' ' && stage[0] != '|' {
-			s += " "
-		}
-		s += stage
-	}
 	if r.Hints != nil {
 		s += " " + r.Hints.String()
 	}

@@ -30,14 +30,15 @@ type typedExpression interface {
 	impliedType() StaticType
 }
 
-// RootExpr is the top-level AST node. A leaf node (Op == OpNone) embeds a
-// single Expr. A math node (Op != OpNone) combines two sub-trees via a
-// binary arithmetic operator (+, -, *, /).
+// RootExpr is the top-level AST node.
 type RootExpr struct {
-	Hints              *Hints
-	OptimizationCount  int
-	Expr               Expr
-	MetricsSecondStage secondStageElement
+	Hints             *Hints
+	OptimizationCount int
+	Expr              Expr
+}
+
+func (e *RootExpr) MetricsSecondStage() secondStageElement {
+	return &e.Expr
 }
 
 func (e *RootExpr) HasMathOperation() bool {
@@ -53,32 +54,32 @@ func (e *RootExpr) SingleExpression() (*ExprLeaf, bool) {
 }
 
 type Expr struct {
-	Leaf *ExprLeaf
-	Op   Operator
-	LHS  *Expr
-	RHS  *Expr
+	Leaf        *ExprLeaf
+	Op          Operator
+	LHS         *Expr
+	RHS         *Expr
+	SecondStage secondStageElement
 }
 
-// ExprLeaf holds the data for a single TraceQL query: its pipeline, optional
-// metrics stages, hints, and optimisation metadata.
+// ExprLeaf holds the data for a single TraceQL query: its pipeline and
+// optional metrics first stage.
 type ExprLeaf struct {
-	Pipeline           Pipeline
-	MetricsPipeline    firstStageElement
-	MetricsSecondStage secondStageElement
+	Pipeline        Pipeline
+	MetricsPipeline firstStageElement
 }
 
-func (e *Expr) CollectLeaves() []ExprLeaf {
-	leaves := make([]ExprLeaf, 0, 8)
+func (e *Expr) CollectLeaves() []*Expr {
+	leaves := make([]*Expr, 0, 8)
 	e.collectLeaves(&leaves)
 	return leaves
 }
 
-func (e *Expr) collectLeaves(out *[]ExprLeaf) {
+func (e *Expr) collectLeaves(out *[]*Expr) {
 	if e == nil {
 		return
 	}
 	if e.Leaf != nil {
-		*out = append(*out, *e.Leaf)
+		*out = append(*out, e)
 		return
 	}
 	e.LHS.collectLeaves(out)
@@ -166,11 +167,13 @@ func newRootExprWithMetricsTwoStage(e PipelineElement, m1 firstStageElement, m2 
 	}
 
 	return &RootExpr{
-		Expr: Expr{Leaf: &ExprLeaf{
-			Pipeline:           p,
-			MetricsPipeline:    m1,
-			MetricsSecondStage: m2,
-		}},
+		Expr: Expr{
+			Leaf: &ExprLeaf{
+				Pipeline:        p,
+				MetricsPipeline: m1,
+			},
+			SecondStage: m2,
+		},
 	}
 }
 

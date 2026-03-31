@@ -3789,7 +3789,7 @@ func BenchmarkMetricsFrontendEvaluator(b *testing.B) {
 		}
 	}
 
-	compileSingle := func(b *testing.B, mode AggregateMode) MetricsFrontendEvaluator {
+	compileSingle := func(b *testing.B, mode AggregateMode) *MetricsFrontendEvaluator {
 		b.Helper()
 		e := NewEngine()
 		eval, err := e.CompileMetricsQueryRangeNonRaw(newReq(singleQuery), mode)
@@ -3797,7 +3797,7 @@ func BenchmarkMetricsFrontendEvaluator(b *testing.B) {
 		return eval
 	}
 
-	compileMath := func(b *testing.B, mode AggregateMode) MetricsFrontendEvaluator {
+	compileMath := func(b *testing.B, mode AggregateMode) *MetricsFrontendEvaluator {
 		b.Helper()
 		e := NewEngine()
 		eval, err := e.CompileMetricsQueryRangeNonRaw(newReq(mathQuery), mode)

@@ -26,33 +26,29 @@ func (e Expr) validate() error {
 		if err := e.LHS.validate(); err != nil {
 			return err
 		}
-		return e.RHS.validate()
-	}
-
-	err := e.Leaf.Pipeline.validate()
-	if err != nil {
-		return err
-	}
-
-	if e.Leaf.MetricsPipeline != nil {
-		err := e.Leaf.MetricsPipeline.validate()
-		if err != nil {
+		if err := e.RHS.validate(); err != nil {
 			return err
+		}
+	} else {
+		if err := e.Leaf.Pipeline.validate(); err != nil {
+			return err
+		}
+		if e.Leaf.MetricsPipeline != nil {
+			if err := e.Leaf.MetricsPipeline.validate(); err != nil {
+				return err
+			}
+		}
+		// Disallow compare() with second stage functions
+		if e.Leaf.MetricsPipeline != nil && e.SecondStage != nil {
+			if _, ok := e.Leaf.MetricsPipeline.(*MetricsCompare); ok {
+				return fmt.Errorf("`compare()` cannot be used with second stage functions")
+			}
 		}
 	}
 
-	if e.Leaf.MetricsSecondStage != nil {
-		err := e.Leaf.MetricsSecondStage.validate()
-		if err != nil {
+	if e.SecondStage != nil {
+		if err := e.SecondStage.validate(); err != nil {
 			return err
-		}
-	}
-
-	// extra validation to disallow compare() with second stage functions
-	// for example: `{} | compare({status=error}) | topk(10)` doesn't make sense
-	if e.Leaf.MetricsPipeline != nil && e.Leaf.MetricsSecondStage != nil {
-		if _, ok := e.Leaf.MetricsPipeline.(*MetricsCompare); ok {
-			return fmt.Errorf("`compare()` cannot be used with second stage functions")
 		}
 	}
 
@@ -60,26 +56,7 @@ func (e Expr) validate() error {
 }
 
 func (r RootExpr) validate() error {
-	if err := r.Expr.validate(); err != nil {
-		return err
-	}
-
-	if r.MetricsSecondStage == nil {
-		return nil
-	}
-
-	if err := r.MetricsSecondStage.validate(); err != nil {
-		return err
-	}
-
-	// Keep compare() semantics consistent with leaf-level validation.
-	for _, leaf := range r.Expr.CollectLeaves() {
-		if _, ok := leaf.MetricsPipeline.(*MetricsCompare); ok {
-			return fmt.Errorf("`compare()` cannot be used with second stage functions")
-		}
-	}
-
-	return nil
+	return r.Expr.validate()
 }
 
 func (p Pipeline) validate() error {
