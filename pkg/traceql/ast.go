@@ -45,7 +45,7 @@ type RootExpr struct {
 // SinglePipeline returns the pipeline and span processor when there is exactly
 // one sub-query. Returns false for math expressions (multiple pipelines).
 func (r *RootExpr) SinglePipeline() (Pipeline, spanProcessor, bool) {
-	if len(r.Pipeline) != 1 {
+	if len(r.Pipeline) > 1 || len(r.BatchSpanProcessor) > 1 || !r.IsFlat() {
 		return Pipeline{}, nil, false
 	}
 	for _, p := range r.Pipeline {
@@ -62,7 +62,7 @@ func (r *RootExpr) MetricsSecondStage() secondStageElement {
 }
 
 func (r *RootExpr) IsFlat() bool {
-	return r.expression.op == OpNone
+	return r.expression == nil || r.expression.op == OpNone
 }
 
 func NeedsFullTrace(e ...Element) bool {
@@ -184,22 +184,9 @@ func newRootExprMath(op Operator, lhs, rhs *RootExpr) *RootExpr {
 		SeriesProcessor:    seriesProcs,
 		expression: &mathExpression{
 			op:  op,
-			lhs: asMathExpression(lhs.expression),
-			rhs: asMathExpression(rhs.expression),
+			lhs: lhs.expression,
+			rhs: rhs.expression,
 		},
-	}
-}
-
-func asMathExpression(s secondStageElement) *mathExpression {
-	if s == nil {
-		return nil
-	}
-	if m, ok := s.(*mathExpression); ok {
-		return m
-	}
-	return &mathExpression{
-		op:     OpNone,
-		filter: s,
 	}
 }
 
@@ -270,6 +257,8 @@ func (r *RootExpr) IsNoop() bool {
 				if !isNoopFilter(x) {
 					return false
 				}
+			// Lots of other expressions here which aren't checked
+			// for noops yet.
 			default:
 				return false
 			}

@@ -94,9 +94,8 @@ func (s *MCPServer) handleSearch(ctx context.Context, request mcp.CallToolReques
 		return mcp.NewToolResultError(fmt.Sprintf("query parse error. Consult TraceQL docs tools: %v", err)), nil
 	}
 
-	// if has sub-queries or has metrics pipelines, not a valid query
-	_, sp, isLeaf := parsed.SinglePipeline()
-	if !isLeaf || sp != nil {
+	_, sp, ok := parsed.SinglePipeline()
+	if !ok || sp != nil {
 		return mcp.NewToolResultError("TraceQL metrics query received on traceql-search tool. Use the traceql-metrics-instant or traceql-metrics-range tool instead"), nil
 	}
 

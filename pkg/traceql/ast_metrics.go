@@ -10,14 +10,13 @@ import (
 )
 
 // metricsElement is the shared base for span and series processing pipelines.
-// It does NOT embed Element — these are runtime evaluation interfaces, not AST nodes.
 type metricsElement interface {
 	init(req *tempopb.QueryRangeRequest, mode AggregateMode)
 	result(multiplier float64) SeriesSet
 	length() int
 }
 
-// spanProcessor handles L1 backend/storage evaluation: individual span observation.
+// spanProcessor handles individual span observation.
 type spanProcessor interface {
 	metricsElement
 	extractConditions(request *FetchSpansRequest)
@@ -25,17 +24,12 @@ type spanProcessor interface {
 	observeExemplar(Span)
 }
 
-// seriesProcessor handles L2/L3 frontend evaluation: pre-aggregated time series.
+// seriesProcessor handles pre-aggregated time series.
 type seriesProcessor interface {
 	metricsElement
 	observeSeries([]*tempopb.TimeSeries)
 }
 
-// firstStageElement is the full interface satisfied by concrete metrics
-// aggregator types (MetricsAggregate, MetricsCompare, averageOverTimeAggregator).
-// It combines Element (for AST operations), spanProcessor (L1), and
-// seriesProcessor (L2/L3). Used in constructors that store the same instance
-// in both BatchSpanProcessor and SeriesProcessor maps.
 type firstStageElement interface {
 	Element
 	spanProcessor
