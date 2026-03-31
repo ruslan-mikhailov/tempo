@@ -209,7 +209,10 @@ func asMathExpression(s secondStageElement) *mathExpression {
 	if m, ok := s.(*mathExpression); ok {
 		return m
 	}
-	return nil
+	return &mathExpression{
+		op:     OpNone,
+		filter: s,
+	}
 }
 
 func newWrappedMetricsPipeline(e PipelineElement, m1 firstStageElement, m2 secondStageElement) *RootExpr {
@@ -241,22 +244,15 @@ func unwrapSingleMathExpr(r *RootExpr) *RootExpr {
 	return r
 }
 
-// chainMathSecondStage chains a root-level second stage pipeline after a
-// metricsExpression. For math: chains math + topk/filter. For single: same
-// as unwrapSingleMathExpr then append.
 func chainMathSecondStage(r *RootExpr, stage ChainedSecondStage) *RootExpr {
-	if !r.IsMath() {
-		// Single entry — unwrap leaf mathExpression, chain with root stage
-		r = unwrapSingleMathExpr(r)
-		if r.MetricsSecondStage != nil {
-			r.MetricsSecondStage = append(ChainedSecondStage{r.MetricsSecondStage}, stage...)
-		} else {
-			r.MetricsSecondStage = stage
-		}
+	if len(stage) == 0 {
 		return r
 	}
-	// Math: prepend mathExpression to the chain
-	r.MetricsSecondStage = append(ChainedSecondStage{r.MetricsSecondStage}, stage...)
+	if r.MetricsSecondStage == nil {
+		r.MetricsSecondStage = stage
+	} else {
+		r.MetricsSecondStage = append(ChainedSecondStage{r.MetricsSecondStage}, stage...)
+	}
 	return r
 }
 

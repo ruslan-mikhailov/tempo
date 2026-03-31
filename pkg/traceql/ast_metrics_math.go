@@ -20,11 +20,11 @@ var noLabelsSeriesMapKey = SeriesMapKey{}
 //
 // Binary nodes recursively process children and combine with applyBinaryOp.
 type mathExpression struct {
-	op     Operator           // OpAdd/OpSub/OpMult/OpDiv for binary; OpNone for leaf
-	key    string             // leaf only: __query_fragment key to match
-	lhs    *mathExpression    // binary only
-	rhs    *mathExpression    // binary only
-	filter secondStageElement // leaf only: per-leaf second stage (e.g. topk inside parens)
+	op     Operator
+	key    string
+	lhs    *mathExpression
+	rhs    *mathExpression
+	filter secondStageElement
 }
 
 var _ secondStageElement = (*mathExpression)(nil)
@@ -86,6 +86,9 @@ func (m *mathExpression) process(input SeriesSet) SeriesSet {
 	rhs := m.rhs.process(input)
 
 	result := applyBinaryOp(m.op, lhs, rhs)
+	if m.filter != nil {
+		result = m.filter.process(result)
+	}
 
 	// Build combined __name__ label from children.
 	combinedName := ""
@@ -262,4 +265,3 @@ func applyArithmeticOp(op Operator, lhs, rhs float64) float64 {
 		return math.NaN()
 	}
 }
-
