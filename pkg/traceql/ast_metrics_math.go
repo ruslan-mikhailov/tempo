@@ -165,55 +165,41 @@ func (m *mathExpression) metricName(input SeriesSet) string {
 // processLeaf extracts series matching this leaf's __query_fragment key,
 // strips internal labels, and optionally applies a per-leaf filter.
 func (m *mathExpression) processLeaf(input SeriesSet) SeriesSet {
-	// Check if series have __query_fragment labels (math query with routing)
-	hasFragment := false
-	for _, v := range input {
-		if fv := v.Labels.GetValue(internalLabelQueryFragment); fv.Type == TypeString {
-			hasFragment = true
-			break
-		}
-	}
-
 	var result SeriesSet
-	if hasFragment {
-		result = make(SeriesSet, len(input))
-		for smk, v := range input {
-			// Match by __query_fragment
-			fv := v.Labels.GetValue(internalLabelQueryFragment)
-			if fv.Type != TypeString || fv.EncodeToString(false) != m.key {
+	result = make(SeriesSet, len(input))
+	for smk, v := range input {
+		// Match by __query_fragment
+		fv := v.Labels.GetValue(internalLabelQueryFragment)
+		if fv.Type != TypeString || fv.EncodeToString(false) != m.key {
+			continue
+		}
+
+		// Build new key without __query_fragment and __name__
+		key := SeriesMapKey{}
+		j := 0
+		for i := range smk {
+			if smk[i].Name == labels.MetricName || smk[i].Name == internalLabelQueryFragment {
 				continue
 			}
+			key[j] = smk[i]
+			j++
+		}
 
-			// Build new key without __query_fragment and __name__
-			key := SeriesMapKey{}
-			j := 0
-			for i := range smk {
-				if smk[i].Name == labels.MetricName || smk[i].Name == internalLabelQueryFragment {
-					continue
-				}
-				key[j] = smk[i]
-				j++
-			}
-
-			// Copy the series — must not mutate input since other leaves
-			// may read the same series from the shared input.
-			stripped := make(Labels, 0, len(v.Labels))
-			for _, l := range v.Labels {
-				if l.Name != labels.MetricName && l.Name != internalLabelQueryFragment {
-					stripped = append(stripped, l)
-				}
-			}
-			values := make([]float64, len(v.Values))
-			copy(values, v.Values)
-			result[key] = TimeSeries{
-				Labels:    stripped,
-				Values:    values,
-				Exemplars: v.Exemplars,
+		// Copy the series — must not mutate input since other leaves
+		// may read the same series from the shared input.
+		stripped := make(Labels, 0, len(v.Labels))
+		for _, l := range v.Labels {
+			if l.Name != labels.MetricName && l.Name != internalLabelQueryFragment {
+				stripped = append(stripped, l)
 			}
 		}
-	} else {
-		// Single query: no routing, pass through as-is
-		result = input
+		values := make([]float64, len(v.Values))
+		copy(values, v.Values)
+		result[key] = TimeSeries{
+			Labels:    stripped,
+			Values:    values,
+			Exemplars: v.Exemplars,
+		}
 	}
 
 	if m.filter != nil {
