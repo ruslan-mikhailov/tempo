@@ -45,7 +45,7 @@ type RootExpr struct {
 // SinglePipeline returns the pipeline and span processor when there is exactly
 // one sub-query. Returns false for math expressions (multiple pipelines).
 func (r *RootExpr) SinglePipeline() (Pipeline, spanProcessor, bool) {
-	if len(r.Pipeline) > 1 || len(r.BatchSpanProcessor) > 1 || !r.IsFlat() {
+	if len(r.Pipeline) > 1 || len(r.BatchSpanProcessor) > 1 || (r.expression != nil && r.expression.op != OpNone) {
 		return Pipeline{}, nil, false
 	}
 	for _, p := range r.Pipeline {
@@ -59,10 +59,6 @@ func (r *RootExpr) SinglePipeline() (Pipeline, spanProcessor, bool) {
 
 func (r *RootExpr) MetricsSecondStage() secondStageElement {
 	return r.expression
-}
-
-func (r *RootExpr) IsFlat() bool {
-	return r.expression == nil || r.expression.op == OpNone
 }
 
 func NeedsFullTrace(e ...Element) bool {

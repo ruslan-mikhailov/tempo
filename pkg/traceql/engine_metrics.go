@@ -975,17 +975,7 @@ func (e *Engine) CompileMetricsQueryRangeNonRaw(req *tempopb.QueryRangeRequest, 
 		return nil, fmt.Errorf("not a metrics query")
 	}
 
-	// Init series processor with mode
-	// TODO: this is temp solution. It should not care about batch processing I think.
-	var sp seriesProcessor
-	if len(expr.SeriesProcessor) == 1 {
-		for _, p := range expr.SeriesProcessor {
-			sp = p
-		}
-	} else {
-		sp = batchSeriesProcessor(expr.SeriesProcessor)
-	}
-
+	sp := batchSeriesProcessor(expr.SeriesProcessor)
 	sp.init(req, mode)
 
 	// Only run second stage in final mode
@@ -1125,11 +1115,6 @@ func (e *Engine) CompileMetricsQueryRange(req *tempopb.QueryRangeRequest, timeOv
 		bme[key] = me
 	}
 
-	if len(bme) == 1 && expr.IsFlat() {
-		for _, me := range bme {
-			return me, nil
-		}
-	}
 	return bme, nil
 }
 
