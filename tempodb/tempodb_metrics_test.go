@@ -53,6 +53,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | rate()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 1.0},        // Interval (0, 15], 15 spans at 1-15
@@ -66,6 +67,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | rate()"),
 				},
 				// with two sources rate will be doubled
 				Samples: []tempopb.Sample{
@@ -84,6 +86,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ .service.name = `even` } | rate()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 7.0 / 15.0}, // Interval (0, 15], 7 spans at 2, 4, 6, 8, 10, 12, 14
@@ -97,6 +100,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ .service.name = `even` } | rate()"),
 				},
 				// with two sources rate will be doubled
 				Samples: []tempopb.Sample{
@@ -115,6 +119,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | rate()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 1.0},        // Interval (0, 15], 15 spans at 1-15
@@ -128,6 +133,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | rate()"),
 				},
 				// with two sources rate will be doubled
 				Samples: []tempopb.Sample{
@@ -146,6 +152,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "rate"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ .service.name = `does_not_exist` } | rate()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -163,6 +170,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15}, // Interval (0, 15], 15 spans
@@ -176,6 +184,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				// with two sources count will be doubled
 				Samples: []tempopb.Sample{
@@ -194,6 +203,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString(".service.name", "even"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()by(.service.name)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 7}, // (0, 15]: [2, 4, 6, 8, 10, 12, 14] - total: 7
@@ -205,6 +215,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString(".service.name", "odd"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()by(.service.name)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 8}, // (0, 15]: [1, 3, 5, 7, 9, 11, 13, 15] - total: 8
@@ -218,6 +229,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString(".service.name", "even"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()by(.service.name)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 7},
@@ -229,6 +241,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString(".service.name", "odd"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()by(.service.name)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 8},
@@ -246,6 +259,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "min_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | min_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 1},  // Interval (0, 15], min is 1
@@ -264,6 +278,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15}, // Interval (0, 15], max is 15
@@ -282,6 +297,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "avg_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | avg_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 120 / 15.0}, // sum from 1 to 15 is 120
@@ -294,6 +310,7 @@ var queryRangeTestCases = []struct {
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "avg_over_time"),
 					tempopb.MakeKeyValueString("__meta_type", "__count"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | avg_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -308,6 +325,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "avg_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | avg_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 120 / 15.0}, // sum from 1 to 15 is 120
@@ -320,6 +338,7 @@ var queryRangeTestCases = []struct {
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "avg_over_time"),
 					tempopb.MakeKeyValueString("__meta_type", "__count"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | avg_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 15},
@@ -348,6 +367,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "sum_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | sum_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 120}, // sum from 1 to 15 is 120
@@ -361,6 +381,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "sum_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | sum_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 120},
@@ -379,6 +400,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 1.073741824),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 1}, // 1 number (1) is less than 1.07
@@ -390,6 +412,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 2.147483648),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 1}, // 1 number (2) is between 1.07 and 2.15
@@ -401,6 +424,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 4.294967296),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2}, // 2 numbers (3, 4) are between 2.15 and 4.29
@@ -412,6 +436,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 8.589934592),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 4}, // 5, 6, 7, 8
@@ -423,6 +448,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 17.179869184),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 7}, // 9, 10, 11, 12, 13, 14, 15 from interval (0,15]
@@ -434,6 +460,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 34.359738368),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -445,6 +472,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 68.719476736),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -458,6 +486,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 1.073741824),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 1},
@@ -469,6 +498,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 2.147483648),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 1},
@@ -480,6 +510,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 4.294967296),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 2},
@@ -491,6 +522,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 8.589934592),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 4},
@@ -502,6 +534,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 17.179869184),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 7},
@@ -513,6 +546,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 34.359738368),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -524,6 +558,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 68.719476736),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | quantile_over_time(duration,0.50000)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -558,6 +593,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 1.073741824),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 1}, // 1 number (1) is less than 1.07
@@ -569,6 +605,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 2.147483648),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 1}, // 1 number (2) is between 1.07 and 2.15
@@ -580,6 +617,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 4.294967296),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2}, // 2 numbers (3, 4) are between 2.15 and 4.29
@@ -591,6 +629,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 8.589934592),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 4}, // 5, 6, 7, 8
@@ -602,6 +641,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 17.179869184),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 7}, // 9, 10, 11, 12, 13, 14, 15 from interval (0,15]
@@ -613,6 +653,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 34.359738368),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -624,6 +665,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 68.719476736),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -637,6 +679,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 1.073741824),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 1},
@@ -648,6 +691,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 2.147483648),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 1},
@@ -659,6 +703,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 4.294967296),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 2},
@@ -670,6 +715,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 8.589934592),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 4},
@@ -681,6 +727,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 17.179869184),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 2 * 7},
@@ -692,6 +739,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 34.359738368),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -703,6 +751,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueDouble("__bucket", 68.719476736),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | histogram_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 0},
@@ -731,6 +780,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -758,6 +808,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -786,6 +837,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -812,6 +864,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -839,6 +892,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -865,6 +919,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -892,6 +947,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -919,6 +975,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -946,6 +1003,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "max_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | max_over_time(duration)"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 15_000, Value: 15},
@@ -979,6 +1037,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 5_000, Value: 3}, // 1, 2, 3
@@ -989,6 +1048,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 5_000, Value: 3 * 2},
@@ -1008,6 +1068,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 5_000, Value: 5}, // 1, 2, 3, 4, 5
@@ -1018,6 +1079,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 5_000, Value: 5 * 2},
@@ -1037,6 +1099,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 500, Value: 0},
@@ -1052,6 +1115,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 500, Value: 0},
@@ -1076,6 +1140,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 30_000, Value: 10},
@@ -1088,6 +1153,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 30_000, Value: 2 * 10},
@@ -1109,6 +1175,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 30_000, Value: 9},
@@ -1121,6 +1188,7 @@ var queryRangeTestCases = []struct {
 			{
 				Labels: []common_v1.KeyValue{
 					tempopb.MakeKeyValueString("__name__", "count_over_time"),
+					tempopb.MakeKeyValueString("__query_fragment", "{ true } | count_over_time()"),
 				},
 				Samples: []tempopb.Sample{
 					{TimestampMs: 30_000, Value: 2 * 9},
@@ -2062,6 +2130,7 @@ var expectedCompareTs = []*tempopb.TimeSeries{
 		Labels: []common_v1.KeyValue{
 			tempopb.MakeKeyValueString("__meta_type", "baseline"),
 			tempopb.MakeKeyValueString("resource.service.name", "odd"),
+			tempopb.MakeKeyValueString("__query_fragment", "{ true } | compare({ .service.name = `even` }}"),
 		},
 		Samples: []tempopb.Sample{
 			{TimestampMs: 15_000, Value: 8},
@@ -2074,6 +2143,7 @@ var expectedCompareTs = []*tempopb.TimeSeries{
 		Labels: []common_v1.KeyValue{
 			tempopb.MakeKeyValueString("__meta_type", "baseline_total"),
 			tempopb.MakeKeyValueString("resource.service.name", "nil"),
+			tempopb.MakeKeyValueString("__query_fragment", "{ true } | compare({ .service.name = `even` }}"),
 		},
 		Samples: []tempopb.Sample{
 			{TimestampMs: 15_000, Value: 8},
@@ -2086,6 +2156,7 @@ var expectedCompareTs = []*tempopb.TimeSeries{
 		Labels: []common_v1.KeyValue{
 			tempopb.MakeKeyValueString("__meta_type", "selection"),
 			tempopb.MakeKeyValueString("resource.service.name", "even"),
+			tempopb.MakeKeyValueString("__query_fragment", "{ true } | compare({ .service.name = `even` }}"),
 		},
 		Samples: []tempopb.Sample{
 			{TimestampMs: 15_000, Value: 7},
@@ -2098,6 +2169,7 @@ var expectedCompareTs = []*tempopb.TimeSeries{
 		Labels: []common_v1.KeyValue{
 			tempopb.MakeKeyValueString("__meta_type", "selection_total"),
 			tempopb.MakeKeyValueString("resource.service.name", "nil"),
+			tempopb.MakeKeyValueString("__query_fragment", "{ true } | compare({ .service.name = `even` }}"),
 		},
 		Samples: []tempopb.Sample{
 			{TimestampMs: 15_000, Value: 7},

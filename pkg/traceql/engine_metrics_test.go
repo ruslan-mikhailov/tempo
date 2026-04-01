@@ -14,6 +14,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func singleBatchMetricsEvaluator(eval MetricsEvaluator) (*metricsEvaluator, error) {
+	batch, ok := eval.(batchMetricsEvaluator)
+	if !ok {
+		return nil, fmt.Errorf("expected batchMetricsEvaluator, got %T", eval)
+	}
+	if len(batch) != 1 {
+		return nil, fmt.Errorf("expected batchMetricsEvaluator of size 1, got %d", len(batch))
+	}
+
+	for _, inner := range batch {
+		me, ok := inner.(*metricsEvaluator)
+		if !ok {
+			return nil, fmt.Errorf("expected *metricsEvaluator inside batch, got %T", inner)
+		}
+		return me, nil
+	}
+
+	return nil, fmt.Errorf("expected batchMetricsEvaluator to contain one metricsEvaluator")
+}
+
 func TestDefaultQueryRangeStep(t *testing.T) {
 	day := 24 * time.Hour
 	tc := []struct {
@@ -495,7 +515,9 @@ func TestCompileMetricsQueryRangeExemplars(t *testing.T) {
 
 	require.NoError(t, err)
 	require.NotNil(t, eval)
-	require.Equal(t, 5, eval.(*metricsEvaluator).maxExemplars)
+	me, err := singleBatchMetricsEvaluator(eval)
+	require.NoError(t, err)
+	require.Equal(t, 5, me.maxExemplars)
 }
 
 func TestCompileMetricsQueryRangeExemplarsSafetyCap(t *testing.T) {
@@ -520,7 +542,9 @@ func TestCompileMetricsQueryRangeExemplarsSafetyCap(t *testing.T) {
 			}
 			eval, err := NewEngine().CompileMetricsQueryRange(req, 0, false)
 			require.NoError(t, err)
-			require.Equal(t, tc.expected, eval.(*metricsEvaluator).maxExemplars)
+			me, err := singleBatchMetricsEvaluator(eval)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, me.maxExemplars)
 		})
 	}
 }
@@ -665,7 +689,8 @@ func TestCompileMetricsQueryRangeFetchSpansRequest(t *testing.T) {
 			require.NoError(t, err)
 
 			// Nil out func to Equal works
-			me := eval.(*metricsEvaluator)
+			me, err := singleBatchMetricsEvaluator(eval)
+			require.NoError(t, err)
 			me.storageReq.SecondPass = nil
 			require.Equal(t, tc.expectedReq, *me.storageReq)
 		})
@@ -1124,15 +1149,19 @@ func TestCountOverTimeInstantNsWithCutoff(t *testing.T) {
 		// process different series in L1
 		layer1, err := e.CompileMetricsQueryRange(&req1, 0, false)
 		require.NoError(t, err)
+		me, err := singleBatchMetricsEvaluator(layer1)
+		require.NoError(t, err)
 		for _, s := range in1 {
-			layer1.(*metricsEvaluator).metricsPipeline.observe(s)
+			me.metricsPipeline.observe(s)
 		}
 		res1 := layer1.Results().ToProto(&req1)
 
 		layer1, err = e.CompileMetricsQueryRange(&req2, 0, false)
 		require.NoError(t, err)
+		me, err = singleBatchMetricsEvaluator(layer1)
+		require.NoError(t, err)
 		for _, s := range in2 {
-			layer1.(*metricsEvaluator).metricsPipeline.observe(s)
+			me.metricsPipeline.observe(s)
 		}
 		res2 := layer1.Results().ToProto(&req2)
 
@@ -1726,14 +1755,18 @@ func TestObserveSeriesAverageOverTimeForSpanAttribute(t *testing.T) {
 	layer2B, _ := e.CompileMetricsQueryRangeNonRaw(req, AggregateModeSum)
 	layer3, _ := e.CompileMetricsQueryRangeNonRaw(req, AggregateModeFinal)
 
+	me, err := singleBatchMetricsEvaluator(layer1A)
+	require.NoError(t, err)
 	for _, s := range in {
-		layer1A.(*metricsEvaluator).metricsPipeline.observe(s)
+		me.metricsPipeline.observe(s)
 	}
 
 	layer2A.ObserveSeries(layer1A.Results().ToProto(req))
 
+	me, err = singleBatchMetricsEvaluator(layer1B)
+	require.NoError(t, err)
 	for _, s := range in2 {
-		layer1B.(*metricsEvaluator).metricsPipeline.observe(s)
+		me.metricsPipeline.observe(s)
 	}
 
 	layer2B.ObserveSeries(layer1B.Results().ToProto(req))
@@ -2992,8 +3025,12 @@ func processLayer1AndLayer2(req *tempopb.QueryRangeRequest, in ...[]Span) (Serie
 		if err != nil {
 			return nil, err
 		}
+		me, err := singleBatchMetricsEvaluator(layer1)
+		if err != nil {
+			return nil, err
+		}
 		for _, s := range spanSet {
-			layer1.(*metricsEvaluator).metricsPipeline.observe(s)
+			me.metricsPipeline.observe(s)
 		}
 		res := layer1.Results()
 		// Pass layer 1 to layer 2
