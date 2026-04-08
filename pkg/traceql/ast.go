@@ -202,6 +202,16 @@ func chainMathSecondStage(r *RootExpr, stage ChainedSecondStage) *RootExpr {
 	return r
 }
 
+func newRootExprScalarMath(op Operator, value float64, rhs *RootExpr, scalarOnLeft bool) *RootExpr {
+	scalarOp := newMetricsScalarOp(op, value, scalarOnLeft)
+	if rhs.expression.filter == nil {
+		rhs.expression.filter = scalarOp
+	} else {
+		rhs.expression.filter = ChainedSecondStage{rhs.expression.filter, scalarOp}
+	}
+	return rhs
+}
+
 func (r *RootExpr) withHints(h *Hints) *RootExpr {
 	r.Hints = h
 	return r
