@@ -860,21 +860,37 @@ func (c *SyncIterator) next() (RowNumber, *pq.Value, error) {
 			}
 		}
 
-		// Consume current buffer until empty
-		for c.currBufN < len(c.currBuf) {
-			v := &c.currBuf[c.currBufN]
-
-			// Inspect all values to track the current row number,
-			// even if the value is filtered out next.
-			c.curr.Next(v.RepetitionLevel(), v.DefinitionLevel(), c.maxDefinitionLevel)
-			c.currBufN++
-			c.currPageN++
-
-			if c.filter != nil && !c.filter.KeepValue(*v) {
-				continue
+		// Consume current buffer until empty. The no-filter path runs every
+		// per-value profile sample so hoisting the nil check out of the hot
+		// loop meaningfully reduces per-value cost across the live-store
+		// fleet.
+		if c.filter == nil {
+			if c.currBufN < len(c.currBuf) {
+				v := &c.currBuf[c.currBufN]
+				c.curr.Next(v.RepetitionLevel(), v.DefinitionLevel(), c.maxDefinitionLevel)
+				c.currBufN++
+				c.currPageN++
+				return c.curr, v, nil
 			}
+		} else {
+			// Hoist the filter into a local so the compiler can keep the
+			// method-value call through a register across iterations and the
+			// inner loop doesn't re-read c.filter per value.
+			keep := c.filter.KeepValue
+			for c.currBufN < len(c.currBuf) {
+				v := &c.currBuf[c.currBufN]
 
-			return c.curr, v, nil
+				// Inspect all values to track the current row number,
+				// even if the value is filtered out next.
+				c.curr.Next(v.RepetitionLevel(), v.DefinitionLevel(), c.maxDefinitionLevel)
+				c.currBufN++
+				c.currPageN++
+
+				if !keep(*v) {
+					continue
+				}
+				return c.curr, v, nil
+			}
 		}
 	}
 }

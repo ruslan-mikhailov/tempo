@@ -243,6 +243,49 @@ func BenchmarkColumnIterator(b *testing.B) {
 	}
 }
 
+// alwaysTrueIntPredicate keeps every int64 value — used to measure the
+// per-value cost of the filter dispatch independently of predicate work.
+type alwaysTrueIntPredicate struct{}
+
+func (alwaysTrueIntPredicate) String() string                          { return "alwaysTrue" }
+func (alwaysTrueIntPredicate) KeepValue(parquet.Value) bool            { return true }
+func (alwaysTrueIntPredicate) KeepPage(parquet.Page) bool              { return true }
+func (alwaysTrueIntPredicate) KeepColumnChunk(*ColumnChunkHelper) bool { return true }
+
+func BenchmarkSyncIteratorFilterHoist(b *testing.B) {
+	count := 100_000
+	pf := createTestFile(b, count)
+	idx, _, _ := GetColumnIndexByPath(pf, "A")
+
+	cases := []struct {
+		name   string
+		filter Predicate
+	}{
+		{"unfiltered", nil},
+		{"always-true-filter", alwaysTrueIntPredicate{}},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				iter := NewSyncIterator(context.TODO(), pf.RowGroups(), idx,
+					SyncIteratorOptSelectAs("A"),
+					SyncIteratorOptPredicate(tc.filter),
+					SyncIteratorOptMaxDefinitionLevel(MaxDefinitionLevel))
+				for {
+					res, err := iter.Next()
+					require.NoError(b, err)
+					if res == nil {
+						break
+					}
+				}
+				iter.Close()
+			}
+		})
+	}
+}
+
 func benchmarkColumnIterator(b *testing.B, makeIter makeTestIterFn) {
 	count := 100_000
 	pf := createTestFile(b, count)
