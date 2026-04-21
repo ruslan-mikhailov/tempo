@@ -33,24 +33,42 @@ func NewStringNotEqualPredicate(s string) Predicate {
 // ByteInPredicate checks for any of the given strings. Case-sensitive exact byte matching
 type ByteInPredicate struct {
 	values [][]byte
+	// Populated when len(values) >= byteInMapThreshold so KeepValue is O(1).
+	// values is retained for KeepColumnChunk/KeepPage bound checks.
+	set map[string]struct{}
 }
+
+// byteInMapThreshold is the smallest predicate size at which a map lookup
+// beats a linear bytes.Equal scan. Below this, the branch-predicted slice
+// loop with bounded n is faster than a map hash + probe. Empirically the
+// crossover on an arm64 live-store workload is between n=4 and n=16; we
+// pick 8 to stay conservative so small OR-lowered IN-lists keep their
+// linear fast path.
+const byteInMapThreshold = 8
 
 var _ Predicate = (*ByteInPredicate)(nil)
 
 func NewStringInPredicate(ss []string) Predicate {
-	p := &ByteInPredicate{
-		values: make([][]byte, len(ss)),
-	}
+	bb := make([][]byte, len(ss))
 	for i := range ss {
-		p.values[i] = []byte(ss[i])
+		bb[i] = []byte(ss[i])
 	}
-	return p
+	return newByteInPredicate(bb)
 }
 
 func NewByteInPredicate(bb [][]byte) Predicate {
-	return &ByteInPredicate{
-		values: bb,
+	return newByteInPredicate(bb)
+}
+
+func newByteInPredicate(bb [][]byte) *ByteInPredicate {
+	p := &ByteInPredicate{values: bb}
+	if len(bb) >= byteInMapThreshold {
+		p.set = make(map[string]struct{}, len(bb))
+		for _, v := range bb {
+			p.set[string(v)] = struct{}{}
+		}
 	}
+	return p
 }
 
 func (p *ByteInPredicate) String() string {
@@ -90,6 +108,12 @@ func (p *ByteInPredicate) KeepColumnChunk(cc *ColumnChunkHelper) bool {
 
 func (p *ByteInPredicate) KeepValue(v pq.Value) bool {
 	ba := v.ByteArray()
+	if p.set != nil {
+		// Compiler special-cases m[string(b)] to avoid the []byte→string
+		// allocation; keep this shape verbatim.
+		_, ok := p.set[string(ba)]
+		return ok
+	}
 	for _, ss := range p.values {
 		if bytes.Equal(ba, ss) {
 			return true
@@ -106,24 +130,32 @@ func (p *ByteInPredicate) KeepPage(pq.Page) bool {
 // ByteNotInPredicate checks for any of the given strings. Case-sensitive exact byte matching
 type ByteNotInPredicate struct {
 	values [][]byte
+	set    map[string]struct{}
 }
 
 var _ Predicate = (*ByteNotInPredicate)(nil)
 
 func NewStringNotInPredicate(ss []string) Predicate {
-	p := &ByteNotInPredicate{
-		values: make([][]byte, len(ss)),
-	}
+	bb := make([][]byte, len(ss))
 	for i := range ss {
-		p.values[i] = []byte(ss[i])
+		bb[i] = []byte(ss[i])
 	}
-	return p
+	return newByteNotInPredicate(bb)
 }
 
 func NewByteNotInPredicate(bb [][]byte) Predicate {
-	return &ByteNotInPredicate{
-		values: bb,
+	return newByteNotInPredicate(bb)
+}
+
+func newByteNotInPredicate(bb [][]byte) *ByteNotInPredicate {
+	p := &ByteNotInPredicate{values: bb}
+	if len(bb) >= byteInMapThreshold {
+		p.set = make(map[string]struct{}, len(bb))
+		for _, v := range bb {
+			p.set[string(v)] = struct{}{}
+		}
 	}
+	return p
 }
 
 func (p *ByteNotInPredicate) String() string {
@@ -147,6 +179,10 @@ func (p *ByteNotInPredicate) KeepColumnChunk(cc *ColumnChunkHelper) bool {
 
 func (p *ByteNotInPredicate) KeepValue(v pq.Value) bool {
 	ba := v.ByteArray()
+	if p.set != nil {
+		_, ok := p.set[string(ba)]
+		return !ok
+	}
 	for _, ss := range p.values {
 		if bytes.Equal(ba, ss) {
 			return false

@@ -91,11 +91,15 @@ func (p {{ $structName }}) KeepPage(page pq.Page) bool {
 }
 
 func (p {{ $structName }}) KeepValue(v pq.Value) bool {
+{{- if .CustomKeepValueBody }}
+	{{ .CustomKeepValueBody }}
+{{- else }}
 	if v.IsNull() {
 		return false
 	}
 	vv := v.{{ $pred.ParquetFunc }}
 	return {{ .CompareCond }}
+{{- end }}
 }
 {{- end }}
 {{- end }}
@@ -215,6 +219,11 @@ func (p {{ $structName }}) KeepValue(v pq.Value) bool {
 		Op          string
 		CompareCond string
 		RangeCond   string
+		// CustomKeepValueBody overrides the generated KeepValue body. When
+		// set, it replaces the default `if v.IsNull() { return false }; vv
+		// := v.X(); return CompareCond` template. Used for byte-array
+		// predicates that can fold the null check into the comparison.
+		CustomKeepValueBody string
 	}
 
 	preds := []struct {
@@ -366,6 +375,16 @@ func (p {{ $structName }}) KeepValue(v pq.Value) bool {
 					Op:          "Equal",
 					CompareCond: `bytes.Equal(vv, p.value)`,
 					RangeCond:   "(len(min) == 0 && len(max) == 0) || (bytes.Compare(p.value, min) >= 0 && bytes.Compare(p.value, max) <= 0)",
+					// Fast path: bytes.Equal already returns false when vv is
+					// empty (null values produce an empty slice) and p.value
+					// is non-empty, so skip IsNull() on the hot path. The
+					// explicit guard stays for the pathological empty-p.value
+					// case to preserve original null-never-matches semantics.
+					CustomKeepValueBody: `vv := v.ByteArray()
+	if len(p.value) == 0 {
+		return !v.IsNull() && len(vv) == 0
+	}
+	return bytes.Equal(vv, p.value)`,
 				},
 				{
 					Op:          "NotEqual",

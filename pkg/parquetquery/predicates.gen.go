@@ -1075,10 +1075,10 @@ func (p ByteEqualPredicate) KeepPage(page pq.Page) bool {
 }
 
 func (p ByteEqualPredicate) KeepValue(v pq.Value) bool {
-	if v.IsNull() {
-		return false
-	}
 	vv := v.ByteArray()
+	if len(p.value) == 0 {
+		return !v.IsNull() && len(vv) == 0
+	}
 	return bytes.Equal(vv, p.value)
 }
 

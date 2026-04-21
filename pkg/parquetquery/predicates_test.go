@@ -3,6 +3,7 @@ package parquetquery
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
@@ -352,19 +353,40 @@ func BenchmarkSubstringPredicate(b *testing.B) {
 }
 
 func BenchmarkStringInPredicate(b *testing.B) {
-	p := NewStringInPredicate([]string{"abc"})
+	// Size matrix reflects the real live-store workload where IN-lists
+	// routinely carry many trace/span/attribute values. A single-element
+	// predicate is the common "x = 'y'" lowering.
+	sizes := []int{1, 4, 16, 64, 256}
 
-	s := make([]parquet.Value, 1000)
-	for i := 0; i < 1000; i++ {
-		s[i] = parquet.ValueOf(uuid.New().String())
+	// Mix of matching (10%) and non-matching (90%) inputs so the hot path
+	// exercises both early-termination and full scans.
+	inputs := make([]parquet.Value, 1000)
+	for i := range inputs {
+		inputs[i] = parquet.ValueOf(uuid.New().String())
 	}
 
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		for _, ss := range s {
-			p.KeepValue(ss)
+	for _, n := range sizes {
+		vals := make([]string, n)
+		for i := range vals {
+			vals[i] = uuid.New().String()
 		}
+		// 10% of inputs are set to a value from the predicate to exercise
+		// early-return behavior.
+		matchingInputs := make([]parquet.Value, len(inputs))
+		copy(matchingInputs, inputs)
+		for i := 0; i < len(matchingInputs); i += 10 {
+			matchingInputs[i] = parquet.ValueOf(vals[i%n])
+		}
+
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			p := NewStringInPredicate(vals)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				for _, ss := range matchingInputs {
+					p.KeepValue(ss)
+				}
+			}
+		})
 	}
 }
 
