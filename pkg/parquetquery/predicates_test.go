@@ -254,6 +254,72 @@ func TestNewRegexNotInPredicate(t *testing.T) {
 	}
 }
 
+func TestNewOrPredicateCollapses(t *testing.T) {
+	t.Run("nil child collapses to always-true", func(t *testing.T) {
+		p := NewOrPredicate(NewStringEqualPredicate("a"), nil, NewStringEqualPredicate("b"))
+		_, isAlwaysTrue := p.(alwaysTruePredicate)
+		require.True(t, isAlwaysTrue, "a nil child should short-circuit to alwaysTruePredicate")
+		require.True(t, p.KeepValue(parquet.ValueOf("anything")))
+		require.True(t, p.KeepValue(parquet.NullValue()))
+	})
+
+	t.Run("single child returned directly", func(t *testing.T) {
+		inner := NewStringEqualPredicate("a")
+		p := NewOrPredicate(inner)
+		require.Equal(t, inner, p, "single-child Or should return its child unwrapped")
+	})
+
+	t.Run("nested Or is flattened", func(t *testing.T) {
+		// Use mixed-type children so neither inner nor outer collapse to
+		// ByteInPredicate; we just want to see the flattened preds slice.
+		inner := NewOrPredicate(
+			NewStringEqualPredicate("a"),
+			NewIntEqualPredicate(1),
+		)
+		outer := NewOrPredicate(inner, NewIntEqualPredicate(2))
+		op, ok := outer.(*OrPredicate)
+		require.True(t, ok, "outer should stay an OrPredicate, got %T", outer)
+		require.Len(t, op.preds, 3, "flattening should inline inner's preds")
+	})
+
+	t.Run("homogeneous nested Or collapses end-to-end to ByteIn", func(t *testing.T) {
+		// The inner Or already collapses to a ByteInPredicate; the outer
+		// then sees [ByteInPredicate, ByteEqualPredicate] which is mixed
+		// and stays as an OrPredicate. This documents that *pre-flattened*
+		// Or of only ByteEquals produces the expected single ByteIn fast path.
+		p := NewOrPredicate(
+			NewStringEqualPredicate("a"),
+			NewStringEqualPredicate("b"),
+			NewStringEqualPredicate("c"),
+			NewStringEqualPredicate("d"),
+		)
+		bip, ok := p.(*ByteInPredicate)
+		require.True(t, ok, "flat homogeneous Or(ByteEqual…) should collapse to ByteInPredicate, got %T", p)
+		require.Len(t, bip.values, 4)
+	})
+
+	t.Run("homogeneous ByteEqual children collapse to ByteIn", func(t *testing.T) {
+		p := NewOrPredicate(
+			NewStringEqualPredicate("a"),
+			NewStringEqualPredicate("b"),
+		)
+		_, ok := p.(*ByteInPredicate)
+		require.True(t, ok, "Or(ByteEqual,ByteEqual) should collapse to ByteInPredicate, got %T", p)
+		require.True(t, p.KeepValue(parquet.ValueOf("a")))
+		require.True(t, p.KeepValue(parquet.ValueOf("b")))
+		require.False(t, p.KeepValue(parquet.ValueOf("c")))
+	})
+
+	t.Run("mixed children keep Or wrapper", func(t *testing.T) {
+		p := NewOrPredicate(
+			NewStringEqualPredicate("a"),
+			NewIntEqualPredicate(1),
+		)
+		_, ok := p.(*OrPredicate)
+		require.True(t, ok, "heterogeneous Or must remain an OrPredicate, got %T", p)
+	})
+}
+
 // TestOrPredicateCallsKeepColumnChunk ensures that the OrPredicate calls
 // KeepColumnChunk on all of its children. This is important because the
 // Dictionary predicates rely on KeepColumnChunk always being called at the
@@ -383,6 +449,34 @@ func BenchmarkStringInPredicate(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				for _, ss := range matchingInputs {
+					p.KeepValue(ss)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkOrPredicateByteEqual(b *testing.B) {
+	// OrPredicate of N ByteEquals is the common lowering of
+	// `field = "a" || field = "b" || ...`. Measure the raw dispatch cost
+	// to confirm that flattening + collapse into ByteInPredicate wins.
+	sizes := []int{2, 4, 8, 16}
+
+	inputs := make([]parquet.Value, 1000)
+	for i := range inputs {
+		inputs[i] = parquet.ValueOf(uuid.New().String())
+	}
+
+	for _, n := range sizes {
+		preds := make([]Predicate, n)
+		for i := range preds {
+			preds[i] = NewByteEqualPredicate([]byte(uuid.New().String()))
+		}
+		b.Run(fmt.Sprintf("n=%d", n), func(b *testing.B) {
+			p := NewOrPredicate(preds...)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				for _, ss := range inputs {
 					p.KeepValue(ss)
 				}
 			}

@@ -417,10 +417,66 @@ type OrPredicate struct {
 
 var _ Predicate = (*OrPredicate)(nil)
 
-func NewOrPredicate(preds ...Predicate) *OrPredicate {
-	return &OrPredicate{
-		preds: preds,
+// alwaysTruePredicate keeps everything. A nil child predicate has "accept
+// all" semantics in OrPredicate, so if a nil is passed in we collapse the
+// whole Or to this sentinel.
+type alwaysTruePredicate struct{}
+
+var _ Predicate = alwaysTruePredicate{}
+
+func (alwaysTruePredicate) String() string                          { return "alwaysTruePredicate{}" }
+func (alwaysTruePredicate) KeepColumnChunk(*ColumnChunkHelper) bool { return true }
+func (alwaysTruePredicate) KeepPage(pq.Page) bool                   { return true }
+func (alwaysTruePredicate) KeepValue(pq.Value) bool                 { return true }
+
+// NewOrPredicate combines the supplied predicates with OR semantics.
+//
+// Constructor-side normalizations keep KeepValue's per-value dispatch cost
+// bounded:
+//   - nested Or children are flattened (Or(Or(a,b), c) → Or(a,b,c));
+//   - nil children (which mean "accept all") short-circuit the whole Or
+//     to alwaysTruePredicate;
+//   - when every child is a ByteEqualPredicate we collapse to a single
+//     ByteInPredicate, which has an O(1) map lookup above the threshold
+//     and always beats a chain of interface-dispatched bytes.Equal calls.
+//   - a single surviving child is returned directly with no Or wrapper.
+func NewOrPredicate(preds ...Predicate) Predicate {
+	flat := make([]Predicate, 0, len(preds))
+	for _, p := range preds {
+		if p == nil {
+			return alwaysTruePredicate{}
+		}
+		if sub, ok := p.(*OrPredicate); ok {
+			flat = append(flat, sub.preds...)
+			continue
+		}
+		flat = append(flat, p)
 	}
+
+	// Collapse homogeneous ByteEqualPredicate children to a ByteInPredicate.
+	// Must have at least 2 children to be worth collapsing; 1 gets returned
+	// directly below.
+	if len(flat) >= 2 {
+		allByteEqual := true
+		for _, p := range flat {
+			if _, ok := p.(ByteEqualPredicate); !ok {
+				allByteEqual = false
+				break
+			}
+		}
+		if allByteEqual {
+			bb := make([][]byte, len(flat))
+			for i, p := range flat {
+				bb[i] = p.(ByteEqualPredicate).value
+			}
+			return newByteInPredicate(bb)
+		}
+	}
+
+	if len(flat) == 1 {
+		return flat[0]
+	}
+	return &OrPredicate{preds: flat}
 }
 
 func (p *OrPredicate) String() string {
@@ -466,16 +522,13 @@ func (p *OrPredicate) KeepPage(page pq.Page) bool {
 }
 
 func (p *OrPredicate) KeepValue(v pq.Value) bool {
+	// NewOrPredicate strips nil children and collapses single-child / all-
+	// nil cases, so preds is guaranteed to hold ≥2 non-nil Predicates here.
 	for _, p := range p.preds {
-		if p == nil {
-			// Nil means all values are returned
-			return true
-		}
 		if p.KeepValue(v) {
 			return true
 		}
 	}
-
 	return false
 }
 
