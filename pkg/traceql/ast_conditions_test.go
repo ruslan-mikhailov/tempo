@@ -179,11 +179,16 @@ func TestScalarFilter_extractConditions(t *testing.T) {
 			allConditions: false,
 		},
 		{
-			query: `{ .foo = "a" } | 3 > 2`,
+			// Naked-literal scalar filter (`3 > 2`) used to live here with
+			// allConditions=true; the grammar refactor onto `scalar` makes it a
+			// parse error (now covered in test_examples.yaml parse_fails). Using
+			// `count() > 2` instead — count() legitimately adds a condition, so
+			// allConditions is now false.
+			query: `{ .foo = "a" } | count() > 2`,
 			conditions: []Condition{
 				newCondition(NewAttribute("foo"), OpEqual, NewStaticString("a")),
 			},
-			allConditions: true,
+			allConditions: false,
 		},
 	}
 	for _, tt := range tests {

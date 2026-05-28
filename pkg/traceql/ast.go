@@ -140,7 +140,7 @@ func newRootExprWithMetricsTwoStage(e PipelineElement, m1 firstStageElement, m2 
 }
 
 func newRootExprMath(op Operator, lhs, rhs *RootExpr) *RootExpr {
-	// Merge maps from both sides
+	// Merge maps from both sides.
 	pipelines := make(map[string]Pipeline, len(lhs.Pipeline)+len(rhs.Pipeline))
 	spanProcs := make(map[string]spanProcessor, len(lhs.BatchSpanProcessor)+len(rhs.BatchSpanProcessor))
 	seriesProcs := make(batchSeriesProcessor, len(lhs.BatchSpanProcessor)+len(rhs.BatchSpanProcessor))
@@ -210,6 +210,18 @@ func newRootExprScalarMath(op Operator, value float64, rhs *RootExpr, scalarOnLe
 		rhs.expression.filter = ChainedSecondStage{rhs.expression.filter, scalarOp}
 	}
 	return rhs
+}
+
+// scalarLeft / scalarRight wrap newRootExprScalarMath so the boundary grammar
+// actions in expr.y don't have to spell out the opaque trailing bool.
+// `scalarLeft` = the scalar literal appears on the left of the operator,
+// `scalarRight` = on the right.
+func scalarLeft(op Operator, value float64, me *RootExpr) *RootExpr {
+	return newRootExprScalarMath(op, value, me, true)
+}
+
+func scalarRight(op Operator, value float64, me *RootExpr) *RootExpr {
+	return newRootExprScalarMath(op, value, me, false)
 }
 
 func (r *RootExpr) withHints(h *Hints) *RootExpr {

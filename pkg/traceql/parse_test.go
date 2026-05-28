@@ -2055,9 +2055,18 @@ func TestMetricsMathExpression(t *testing.T) {
 					newMetricsAggregate(metricsAggregateRate, nil), nil),
 				true),
 		},
-		// Constant folding in metrics filter: > 1/2
+		// Int math is preserved when both operands are ints (1/2 truncates to 0)
 		{
 			in: `({} | rate()) > 1 / 2`,
+			expected: chainMathSecondStage(
+				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
+					newMetricsAggregate(metricsAggregateRate, nil), nil),
+				ChainedSecondStage{newMetricsFilter(OpGreater, 0, " ")},
+			),
+		},
+		// One float operand promotes both sides to float (1 / 2.0 = 0.5)
+		{
+			in: `({} | rate()) > 1 / 2.0`,
 			expected: chainMathSecondStage(
 				w(newPipeline(newSpansetFilter(NewStaticBool(true))),
 					newMetricsAggregate(metricsAggregateRate, nil), nil),

@@ -522,6 +522,16 @@ func newMetricsFilter(op Operator, value float64, separator string) *MetricsFilt
 	return &MetricsFilter{op: op, value: value, sep: separator}
 }
 
+// newMetricsFilterFromStatic builds a MetricsFilter from a folded constant. Durations
+// are converted to seconds so `rate() > 5s` compares against 5, not 5e9 (nanoseconds).
+func newMetricsFilterFromStatic(op Operator, s Static, separator string) *MetricsFilter {
+	v := s.Float()
+	if s.Type == TypeDuration {
+		v /= float64(time.Second)
+	}
+	return newMetricsFilter(op, v, separator)
+}
+
 func (m *MetricsFilter) String() string {
 	return m.op.String() + " " + formatFloat(m.value)
 }
