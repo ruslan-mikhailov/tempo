@@ -1,6 +1,8 @@
 package main
 
 import (
+	"regexp"
+	"regexp/syntax"
 	"strings"
 	"testing"
 
@@ -35,10 +37,58 @@ func TestHashAttributeNamePerSegment(t *testing.T) {
 
 func TestValueMapperRegexRouting(t *testing.T) {
 	h := newHasher(defaultSalt)
-	// Current behavior: regex and plain hashing are identical, but both are
-	// deterministic. This guards the routing wiring.
+	// Regex operands go through hashRegexValue, plain ones through hashString.
 	require.Equal(t, h.hashRegexValue("x"), h.valueMapper("x", true))
 	require.Equal(t, h.hashString("x"), h.valueMapper("x", false))
+}
+
+func TestHashRegexValue(t *testing.T) {
+	h := newHasher(defaultSalt)
+
+	t.Run("preserves structure, hashes literals", func(t *testing.T) {
+		got := h.hashRegexValue("^a(some|bad).*")
+
+		// Still a valid regex.
+		_, err := regexp.Compile(got)
+		require.NoError(t, err)
+
+		// Literal text is gone.
+		assert.NotContains(t, got, "some")
+		assert.NotContains(t, got, "bad")
+
+		// Structure survives. (Note: String() normalizes ^ to \A and . to a
+		// flag-wrapped form, so we only check the operators that stay verbatim.)
+		for _, want := range []string{"(", "|", ")", "*"} {
+			assert.Contains(t, got, want, "structural %q should survive", want)
+		}
+
+		// Deterministic.
+		assert.Equal(t, got, h.hashRegexValue("^a(some|bad).*"))
+	})
+
+	t.Run("shared literal runs hash identically", func(t *testing.T) {
+		// Two separate "foo" runs (split by an any-char) must map to the same hash.
+		got := h.hashRegexValue("foo.foo")
+		fooHash := h.hashString("foo")
+		assert.NotContains(t, got, "foo", "original literal must be gone")
+		assert.Equal(t, 2, strings.Count(got, fooHash), "both runs hash to the same token")
+	})
+
+	t.Run("literal matches plain value hash (shared keyspace)", func(t *testing.T) {
+		assert.Equal(t, h.hashString("some"), h.hashRegexValue("some"))
+	})
+
+	t.Run("no literals: only structural normalization, no hashing", func(t *testing.T) {
+		for _, p := range []string{".*", "^$", "[a-z]+"} {
+			re, err := syntax.Parse(p, syntax.Perl)
+			require.NoError(t, err)
+			assert.Equal(t, re.String(), h.hashRegexValue(p), "pattern %q has no literals to hash", p)
+		}
+	})
+
+	t.Run("invalid regex falls back to whole-string hash", func(t *testing.T) {
+		assert.Equal(t, h.hashString("["), h.hashRegexValue("["))
+	})
 }
 
 func TestRunEndToEnd(t *testing.T) {

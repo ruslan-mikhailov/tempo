@@ -21,6 +21,7 @@ import (
 	"hash"
 	"io"
 	"os"
+	"regexp/syntax"
 	"strings"
 
 	"github.com/grafana/tempo/pkg/traceql"
@@ -58,11 +59,37 @@ func (h *hasher) hashString(s string) string {
 	return sum
 }
 
-// hashRegexValue handles operands of regex comparisons (=~ / !~). For now it is
-// identical to plain string hashing. It is isolated here so a smarter,
-// regex-aware strategy can be swapped in later without touching the rest.
+// hashRegexValue handles operands of regex comparisons (=~ / !~). It hashes only
+// the literal text inside the pattern while preserving its structure (anchors,
+// groups, alternation, quantifiers, char classes, metacharacters). For example
+// `^a(some|bad).*` keeps its shape, with `a`, `some` and `bad` each replaced by
+// a hash. If the operand is not a valid regex, it falls back to hashing the
+// whole string.
 func (h *hasher) hashRegexValue(s string) string {
-	return h.hashString(s)
+	// syntax.Perl is the flag set Go's own regexp.Compile parses with (it's Go's
+	// default RE2 syntax, not actual Perl). TraceQL compiles regexes via stdlib
+	// regexp too, so this accepts exactly the patterns TraceQL accepts.
+	re, err := syntax.Parse(s, syntax.Perl)
+	if err != nil {
+		return h.hashString(s)
+	}
+	h.hashRegexLiterals(re)
+	return re.String()
+}
+
+// hashRegexLiterals walks a parsed regex AST and replaces every literal run with
+// its hash, in place. Non-literal nodes (anchors, groups, alternation,
+// quantifiers, char classes, ...) are left untouched so the structure survives.
+func (h *hasher) hashRegexLiterals(re *syntax.Regexp) {
+	if re == nil {
+		return
+	}
+	if re.Op == syntax.OpLiteral && len(re.Rune) > 0 {
+		re.Rune = []rune(h.hashString(string(re.Rune)))
+	}
+	for _, sub := range re.Sub {
+		h.hashRegexLiterals(sub)
+	}
 }
 
 // hashAttributeName hashes each dot-separated segment of an attribute name

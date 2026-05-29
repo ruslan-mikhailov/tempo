@@ -78,10 +78,28 @@ ANON_QUERY_SALT='your-private-salt' anon-query < input.txt > output.txt
 
 ## Regex values
 
-Operands of regex comparisons (`=~`, `!~`) are currently hashed exactly like
-plain strings. This is intentionally isolated in `hashRegexValue` so it can be
-replaced later with a regex-aware strategy without affecting the rest of the
-tool.
+Operands of regex comparisons (`=~`, `!~`) are anonymized **structurally**: the
+pattern is parsed and only its literal text is hashed, while anchors, groups,
+alternation, quantifiers, character classes and other metacharacters are kept.
+For example:
+
+```
+^a(some|bad).*   ->   (?-s:\A<hash(a)>(<hash(some)>|<hash(bad)>).*)
+```
+
+Each literal run is hashed as a unit (so `some` becomes a single token), and
+shared runs hash identically. Literal runs use the same hashing as plain string
+values, so a literal `foo` inside a regex and a plain value `foo` map to the
+same token.
+
+Caveats:
+
+- The pattern is re-serialized from its parsed form, so metacharacter spelling
+  is normalized (e.g. `^` becomes `\A`, `.` becomes a flag-wrapped form). The
+  result is an equivalent-shape, valid regex, not a character-for-character copy.
+- Character-class contents (e.g. `[a-z]`, `[Aa]`) are preserved verbatim, not
+  hashed.
+- If an operand is not a valid regex, it falls back to hashing the whole string.
 
 ## Invalid queries
 
