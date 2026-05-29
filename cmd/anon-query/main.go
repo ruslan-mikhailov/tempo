@@ -27,10 +27,8 @@ import (
 	"github.com/grafana/tempo/pkg/traceql"
 )
 
-// defaultSalt is the HMAC key used for hashing. It can be overridden at runtime
-// via the ANON_QUERY_SALT environment variable.
-const defaultSalt = "REPLACEME"
-
+// saltEnvVar names the environment variable that supplies the HMAC key used for
+// hashing. It is mandatory: the tool refuses to run without it.
 const saltEnvVar = "ANON_QUERY_SALT"
 
 // hashLen is the number of hex characters kept from each hash, trading a
@@ -119,9 +117,10 @@ func main() {
 }
 
 func run(in io.Reader, out, errOut io.Writer) int {
-	salt := defaultSalt
-	if v, ok := os.LookupEnv(saltEnvVar); ok {
-		salt = v
+	salt, ok := os.LookupEnv(saltEnvVar)
+	if !ok || salt == "" {
+		fmt.Fprintf(errOut, "anon-query: %s must be set to a non-empty salt\n", saltEnvVar)
+		return 2
 	}
 	h := newHasher(salt)
 

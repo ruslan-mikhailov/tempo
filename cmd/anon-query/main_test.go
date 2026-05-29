@@ -11,7 +11,7 @@ import (
 )
 
 func TestHashDeterministicAndDistinct(t *testing.T) {
-	h := newHasher(defaultSalt)
+	h := newHasher("test-salt")
 
 	a := h.hashString("something")
 	require.Equal(t, a, h.hashString("something"), "hash must be deterministic")
@@ -23,7 +23,7 @@ func TestHashDeterministicAndDistinct(t *testing.T) {
 }
 
 func TestHashAttributeNamePerSegment(t *testing.T) {
-	h := newHasher(defaultSalt)
+	h := newHasher("test-salt")
 
 	got := h.hashAttributeName("something.sub_smth")
 	parts := strings.Split(got, ".")
@@ -36,14 +36,14 @@ func TestHashAttributeNamePerSegment(t *testing.T) {
 }
 
 func TestValueMapperRegexRouting(t *testing.T) {
-	h := newHasher(defaultSalt)
+	h := newHasher("test-salt")
 	// Regex operands go through hashRegexValue, plain ones through hashString.
 	require.Equal(t, h.hashRegexValue("x"), h.valueMapper("x", true))
 	require.Equal(t, h.hashString("x"), h.valueMapper("x", false))
 }
 
 func TestHashRegexValue(t *testing.T) {
-	h := newHasher(defaultSalt)
+	h := newHasher("test-salt")
 
 	t.Run("preserves structure, hashes literals", func(t *testing.T) {
 		got := h.hashRegexValue("^a(some|bad).*")
@@ -91,7 +91,20 @@ func TestHashRegexValue(t *testing.T) {
 	})
 }
 
+func TestRunRequiresSalt(t *testing.T) {
+	t.Setenv(saltEnvVar, "") // present but empty -> rejected
+
+	var out, errOut strings.Builder
+	code := run(strings.NewReader("{ .a = \"b\" }\n"), &out, &errOut)
+
+	require.Equal(t, 2, code)
+	assert.Empty(t, out.String(), "nothing should be emitted without a salt")
+	assert.Contains(t, errOut.String(), saltEnvVar)
+}
+
 func TestRunEndToEnd(t *testing.T) {
+	t.Setenv(saltEnvVar, "test-salt")
+
 	in := strings.NewReader(strings.Join([]string{
 		`{ .something.sub_smth="value123" }`,
 		`{ .something.another_attr="value123" }`,

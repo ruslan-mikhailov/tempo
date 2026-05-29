@@ -69,8 +69,9 @@ readability. Hashing is deterministic: the same input always produces the same
 output, so attributes and values are consistent across all lines and across
 runs (with the same salt).
 
-The salt defaults to the constant `REPLACEME`. Override it for real
-anonymization:
+The salt is **mandatory** and must be supplied via the `ANON_QUERY_SALT`
+environment variable. If it is unset or empty, the tool prints an error and
+exits without processing any input.
 
 ```bash
 ANON_QUERY_SALT='your-private-salt' anon-query < input.txt > output.txt
