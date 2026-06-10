@@ -834,7 +834,7 @@ func (g *GroupingAggregator[F, S]) ObserveExemplar(span Span, value float64, ts 
 	// Observe exemplar
 	all := span.AllAttributes()
 	lbls := make(Labels, 0, len(all))
-	for k, v := range span.AllAttributes() {
+	for k, v := range all {
 		lbls = append(lbls, Label{k.String(), v})
 	}
 	s.agg.ObserveExemplar(value, ts, lbls)

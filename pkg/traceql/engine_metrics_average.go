@@ -510,7 +510,7 @@ func (g *avgOverTimeSpanAggregator[F, S]) ObserveExemplar(span Span, value float
 
 	all := span.AllAttributes()
 	lbls := make(Labels, 0, len(all))
-	for k, v := range span.AllAttributes() {
+	for k, v := range all {
 		lbls = append(lbls, Label{k.String(), v})
 	}
 
