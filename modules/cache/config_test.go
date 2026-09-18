@@ -2,6 +2,7 @@ package cache
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ caches:
 	require.NoError(t, yaml.UnmarshalStrict([]byte(yamlCfg), cfg))
 
 	require.Len(t, cfg.Caches, 1)
+	require.Equal(t, 1, cfg.Caches[0].StoreProbability)
 	clientCfg := cfg.Caches[0].MemcachedConfig.ClientConfig
 	require.Equal(t, "memcached.example.com", clientCfg.Host)
 	require.Equal(t, 100, clientCfg.MaxIdleConns)
@@ -134,6 +136,45 @@ func TestConfigValidation(t *testing.T) {
 				},
 			},
 			expected: errors.New("role foo is not a valid role"),
+		},
+		{
+			name: "invalid - negative store probability",
+			cfg: &Config{
+				Caches: []CacheConfig{
+					{
+						Role:             []cache.Role{cache.RoleBloom},
+						MemcachedConfig:  &memcached.Config{},
+						StoreProbability: -0.1,
+					},
+				},
+			},
+			expected: errors.New("store probability must be between 0 and 1, got -0.1"),
+		},
+		{
+			name: "invalid - store probability above one",
+			cfg: &Config{
+				Caches: []CacheConfig{
+					{
+						Role:             []cache.Role{cache.RoleBloom},
+						MemcachedConfig:  &memcached.Config{},
+						StoreProbability: 1.1,
+					},
+				},
+			},
+			expected: errors.New("store probability must be between 0 and 1, got 1.1"),
+		},
+		{
+			name: "invalid - NaN store probability",
+			cfg: &Config{
+				Caches: []CacheConfig{
+					{
+						Role:             []cache.Role{cache.RoleBloom},
+						MemcachedConfig:  &memcached.Config{},
+						StoreProbability: math.NaN(),
+					},
+				},
+			},
+			expected: errors.New("store probability must be between 0 and 1, got NaN"),
 		},
 	}
 
