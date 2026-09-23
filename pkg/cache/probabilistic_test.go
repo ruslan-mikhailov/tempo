@@ -16,15 +16,15 @@ func TestProbabilisticCacheStore(t *testing.T) {
 		delta         float64
 	}{
 		{
-			name:          "zero never stores",
-			probability:   0,
+			name:          "never store",
+			probability:   1,
 			storeAttempts: 100,
 			expectedCalls: 0,
 			delta:         0,
 		},
 		{
-			name:          "one always stores",
-			probability:   1,
+			name:          "always store",
+			probability:   0,
 			storeAttempts: 100,
 			expectedCalls: 100,
 			delta:         0,
@@ -37,8 +37,8 @@ func TestProbabilisticCacheStore(t *testing.T) {
 			delta:         75, // probability of false positive: 1 every 600k runs
 		},
 		{
-			name:          "75%",
-			probability:   0.75,
+			name:          "25%",
+			probability:   0.25,
 			storeAttempts: 1000,
 			expectedCalls: 750,
 			delta:         75, // probability of false positive: 1 every 21M runs

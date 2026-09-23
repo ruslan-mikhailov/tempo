@@ -12,10 +12,10 @@ type probabilisticCache struct {
 
 var _ Cache = (*probabilisticCache)(nil)
 
-// NewProbabilistic returns a Cache that forwards each Store call with the given probability.
+// NewProbabilistic returns a Cache that skips each Store call with the given probability.
 // Probability must be between 0 and 1, inclusive.
 func NewProbabilistic(cache Cache, probability float64) Cache {
-	if probability >= 1 {
+	if probability == 0 {
 		return cache
 	}
 
@@ -27,6 +27,7 @@ func NewProbabilistic(cache Cache, probability float64) Cache {
 
 func (c *probabilisticCache) Store(ctx context.Context, keys []string, bufs [][]byte) {
 	if rand.Float64() < c.probability { //nolint:gosec // G404: cache admission does not require cryptographic randomness.
-		c.Cache.Store(ctx, keys, bufs)
+		return
 	}
+	c.Cache.Store(ctx, keys, bufs)
 }
