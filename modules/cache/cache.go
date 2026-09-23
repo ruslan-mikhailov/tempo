@@ -59,6 +59,7 @@ func NewProvider(cfg *Config, logger log.Logger) (cache.Provider, error) {
 				return nil, fmt.Errorf("failed to create redis client for roles %s: %w", cacheCfg.Name(), err)
 			}
 		}
+		c = cache.NewProbabilistic(c, cacheCfg.StoreSkipProbability)
 
 		// add this cache for all claimed roles
 		for _, role := range cacheCfg.Role {
