@@ -1,0 +1,31 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  encrypted_attributes:
+    policies:
+      - span_attributes: [secret, api.token]
+        key_file: /etc/alloy/secret-key
+        value_scheme: aes256siv-hkdf-v1
+      - span_attributes: [customer.email]
+        key_file: /etc/alloy/customer-key
+        value_scheme: aes256siv-hkdf-v1
+  batch: {}
+
+exporters:
+  otlp:
+    endpoint: distributor:4317
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [encrypted_attributes, batch]
+      exporters: [otlp]

@@ -20,11 +20,12 @@ datasources:
   url: http://query-frontend:3200
   basicAuth: false
   isDefault: true
-  version: 1
+  version: 0 # Reapply protected settings on startup even when the existing datasource version advanced.
   editable: false
   apiVersion: 1
   uid: tempo-streaming-enabled
   jsonData:
+    protectedAttributesEnabled: true
     httpMethod: GET
     serviceMap:
       datasourceUid: prometheus
@@ -38,11 +39,12 @@ datasources:
   url: http://query-frontend:3200
   basicAuth: false
   isDefault: false
-  version: 1
+  version: 0
   editable: false
   apiVersion: 1
   uid: tempo-streaming-disabled
   jsonData:
+    protectedAttributesEnabled: true
     httpMethod: GET
     serviceMap:
       datasourceUid: prometheus
