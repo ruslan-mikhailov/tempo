@@ -1,0 +1,30 @@
+// Synthetic test logs only. The source receives plaintext; never expose port 3500 publicly.
+loki.source.api "demo" {
+  http {
+    listen_address = "0.0.0.0"
+    listen_port    = 3500
+  }
+  forward_to = [loki.encrypted_logs.demo.receiver]
+}
+
+loki.encrypted_logs "demo" {
+  policy {
+    fields       = ["label.namespace", "line.email"]
+    key_file     = "/etc/alloy/customer-key"
+    value_scheme = "aes256siv-hkdf-v1"
+  }
+  policy {
+    fields       = ["line.api_token"]
+    key_file     = "/etc/alloy/token-key"
+    value_scheme = "aes256siv-hkdf-v1"
+  }
+  forward_to = [loki.write.demo.receiver]
+}
+
+// Keep the writer's external_labels empty: they are merged after the protector.
+// Do not insert plaintext-producing stages between the protector and the writer.
+loki.write "demo" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

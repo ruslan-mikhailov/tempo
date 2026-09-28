@@ -13,6 +13,16 @@ datasources:
   editable: false
   jsonData:
     httpMethod: GET
+- name: Loki
+  type: loki
+  uid: loki
+  access: proxy
+  orgId: 1
+  url: http://loki:3100
+  basicAuth: false
+  isDefault: false
+  version: 1
+  editable: false
 - name: Tempo (yes streaming)
   type: tempo
   access: proxy

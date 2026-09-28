@@ -30,6 +30,27 @@ See below for a list of all examples and the features they demonstrate
 | [Multitenant](./multitenant/) | Single binary | Multitenant | OTel Collector + Direct OTLP | Local filesystem | vulture for data integrity, multiple tenants (tenant-1, tenant-2), streaming queries, mcp |
 | [Debug](./debug/) | Single binary | Single tenant | Direct OTLP | Local filesystem | vulture for data integrity, tempo-debug image for breakpoint debugging, streaming queries, mcp | 
 
+### Plaintext Loki logs in the distributed example
+
+From `example/docker-compose/distributed`, run `docker compose up -d --build`.
+The Grafana image builds `tempo-datasource` and `grafana-loki-datasource`
+from their local checkouts on top of the same `grafana-base` image.
+The `secret-logs` container posts fictional email addresses and `demo-` tokens
+directly to the single-binary Loki service every five seconds. Select the
+**Loki** datasource in [Grafana Explore](http://localhost:3000/explore), set
+the time range to the last 15 minutes, and try:
+
+```logql
+{job="secret-logs-demo"}
+{job="secret-logs-demo"} |= "api_token=demo-"
+{job="secret-logs-demo", customer_email="alice@example.invalid"} |= "login"
+```
+
+This is deliberately **unencrypted** test data. The email is both an indexed
+stream label and part of the log line, and the token is in the line. Loki's
+`3100` port is also exposed locally for inspecting raw query responses. The
+script bypasses Alloy; no protected-logs implementation is enabled.
+
 ### Build images (optional)
 
 This step is not necessary, but it can be nice for local testing. The examples default to the published Tempo 3.0.0 images.

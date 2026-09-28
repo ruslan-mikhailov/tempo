@@ -228,6 +228,39 @@ services:
     depends_on:
       - alloy
 
+  # Alloy protects selected log fields before forwarding to Loki.
+  loki:
+    image: grafana/loki:3.4.2
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./loki.yaml:/etc/loki/local-config.yaml:ro
+    ports:
+      - "3100:3100"
+
+  secret-logs:
+    image: python:3.12-alpine
+    command: ["python", "-u", "/opt/demo/generate-secret-logs.py"]
+    environment:
+      LOKI_PUSH_URL: http://alloy-logs:3500/loki/api/v1/push
+    volumes:
+      - ./generate-secret-logs.py:/opt/demo/generate-secret-logs.py:ro
+    restart: always
+    depends_on:
+      - alloy-logs
+
+  alloy-logs:
+    build:
+      context: ../../../../alloy
+      dockerfile: Dockerfile.encrypted-otel
+    image: tempo-protected-alloy:dev
+    command: ["run", "--stability.level=experimental", "--storage.path=/tmp/alloy-logs", "/etc/alloy/logs.alloy"]
+    volumes:
+      - ./alloy-logs.alloy:/etc/alloy/logs.alloy:ro
+      - ./test-customer-key:/etc/alloy/customer-key:ro
+      - ./test-attribute-key:/etc/alloy/token-key:ro
+    depends_on:
+      - loki
+
   secret-traces:
     image: python:3.12-alpine
     command: ["python", "-u", "/opt/demo/generate-secret-traces.py"]
@@ -281,6 +314,7 @@ services:
       dockerfile: Dockerfile.protected-demo
       additional_contexts:
         grafana-base: service:grafana-base
+        loki-plugin: ../../../../grafana-loki-datasource
     image: tempo-protected-grafana:dev
     volumes:
       - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
@@ -289,7 +323,7 @@ services:
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_AUTH_DISABLE_LOGIN_FORM=true
       - GF_DEFAULT_APP_MODE=development
-      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=tempo
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=tempo,loki
       - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor metricsSummary
       - GF_FEATURE_TOGGLES_splashScreen=false
     ports:
