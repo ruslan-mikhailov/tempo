@@ -54,6 +54,7 @@ For externally supported gRPC API, [refer to Tempo gRPC API](#tempo-grpc-api).
 | [Status](#status)                                                                     | Status                                    | HTTP | `GET /status`                                             |
 | [List build information](#list-build-information)                                     | Status                                    | HTTP | `GET /api/status/buildinfo`                               |
 | [Backend scheduler job status](#backend-scheduler-job-status)                        | Backend scheduler                         | HTTP | `GET /status/backendscheduler`                            |
+| [Submit attribute redaction](#submit-attribute-redaction-grpc)                     | Backend scheduler                         | gRPC | `tempopb.BackendScheduler/SubmitRedaction`               |
 | [MCP Server](https://grafana.com/docs/tempo/<TEMPO_VERSION>/api_docs/mcp-server) (\*) | MCP                                       |      | `/api/mcp`                                                |
 
 _(\*) This endpoint isn't always available, check the specific section for more details._
@@ -1018,10 +1019,84 @@ The response is a plain-text table with two sections:
 
 This endpoint is only available when the backend scheduler component is running.
 
+### Submit attribute redaction (gRPC)
+
+Use `tempopb.BackendScheduler/SubmitRedaction` on the **backend scheduler gRPC port**
+to replace stored span or resource attribute values without deleting their traces.
+This is a gRPC method, not an HTTP endpoint.
+It enqueues block rewrite jobs; the response does not mean the values have been replaced.
+For the `tempo-cli` alternative, refer to [Redact traces](../operations/tempo_cli/#redact-traces).
+
+Send the tenant in `X-Scope-OrgID` gRPC request metadata.
+The scheduler reads the tenant from the request context and ignores the deprecated
+`tenant_id` field in the body.
+The scheduler does not check the caller's authorization to use that tenant ID:
+restrict access to its gRPC port and have a trusted authentication layer set or validate
+`X-Scope-OrgID` before forwarding requests.
+Do not expose this operation to clients that can choose another tenant's header.
+
+The request uses the fields defined in `pkg/tempopb/backendwork.proto`:
+
+| Field | Required | Behavior |
+| --- | --- | --- |
+| `attributeRedaction.key` | Yes | `span.<key>` or `resource.<key>` with a nonempty key. The scope prefix selects span or resource attributes; it isn't part of the stored attribute name. |
+| `attributeRedaction.valuePrefix` | Yes | Nonempty, literal, case-sensitive prefix of a **string** value. Replace the entire matching value with `[REDACTED]`; don't remove the attribute or the trace. |
+| `mode` | No | `REDACTION_MODE_APPLY` by default. `REDACTION_MODE_DRY_RUN` counts matching traces without changing blocks. |
+| `startTimeUnixNano`, `endTimeUnixNano` | No | Inclusive, absolute Unix nanosecond bounds. Set both with start before end, or omit both to scan the tenant's stored blocks. A trace whose time range overlaps the window is selected in full. |
+
+When sending a JSON request, encode the 64-bit window bounds as decimal strings
+to avoid losing nanosecond precision in clients that use floating-point JSON numbers.
+
+Set exactly one operation: `attributeRedaction`, `traceIds`, or `query`.
+You can't combine an attribute replacement with trace deletion.
+The attribute rule applies to scalar string values, including attributes stored in
+dedicated columns, but not arrays or non-string values.
+Each matching trace counts once even when it has several matching attributes or spans.
+Unmatched attributes and traces remain unchanged.
+
+For example, from a Tempo source checkout with `grpcurl` installed, submit a
+dry run against a **local plaintext** backend scheduler at `localhost:9095`:
+
+```bash
+grpcurl -plaintext \
+  -import-path . -import-path vendor -proto pkg/tempopb/backendwork.proto \
+  -H 'X-Scope-OrgID: my-tenant' \
+  -d '{"attributeRedaction":{"key":"span.enc.secret","valuePrefix":"enc:v1:abcbdbc:"},"mode":"REDACTION_MODE_DRY_RUN"}' \
+  localhost:9095 tempopb.BackendScheduler/SubmitRedaction
+```
+
+Remove `-plaintext` and configure TLS for a TLS-enabled backend scheduler.
+After reviewing the dry-run count, omit `mode` or set it to `REDACTION_MODE_APPLY`
+to perform the irreversible rewrite.
+
+The response contains `batchId`, which identifies the submission, and
+`jobsCreated`, the number of block jobs queued.
+Neither field reports completion or the number of matching traces.
+Use [`GET /status/backendscheduler`](#backend-scheduler-job-status) to inspect job state.
+The `tempo_backend_scheduler_redaction_traces_found_total{tenant,mode}` counter
+reports matched traces after workers process jobs (`mode="dry_run"` or `mode="apply"`).
+A dry run can miss blocks that are being compacted, so don't treat its count as a
+guaranteed upper bound.
+
+The scheduler rejects invalid rules, conflicting operations, or invalid window bounds
+with gRPC `InvalidArgument`; a missing tenant returns `Unauthenticated`.
+A second in-progress submission for the same tenant returns `AlreadyExists`.
+Disabled tenant compaction or a dry run with all overlapping blocks busy returns
+`FailedPrecondition`; no tenant blocks or no blocks overlapping the window returns
+`NotFound`.
+
+This is a one-time rewrite of stored blocks, not an ingestion-time redaction policy.
+Traces still in ingest or arriving after the submission aren't covered.
+Cached search results can temporarily show old data.
+Upgrade **both** the backend scheduler and all backend workers before sending
+attribute rules: older workers can ignore the new field and report success
+without replacing any values.
+
 ## Tempo gRPC API
 
-Tempo uses [gRPC](https://grpc.io) to internally communicate with itself, but only has one externally supported client.
-The query-frontend component implements the streaming querier interface defined below.
+Tempo uses [gRPC](https://grpc.io) for communication between components.
+The backend scheduler also accepts the operator-initiated redaction method described above.
+The query-frontend component implements the streaming querier interface described below.
 [Refer here](https://github.com/grafana/tempo/blob/main/pkg/tempopb/) for the complete proto definition and generated code.
 
 By default, this service is only offered over the gRPC port.

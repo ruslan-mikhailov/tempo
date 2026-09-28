@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -74,6 +75,35 @@ func TestRedactCmdSubmitDryRun(t *testing.T) {
 	require.Equal(t, tempopb.RedactionMode_REDACTION_MODE_DRY_RUN, mock.capturedReq.Mode)
 }
 
+func TestRedactCmdSubmitAttribute(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dry-run=%t", dryRun), func(t *testing.T) {
+			cmd := &redactCmd{
+				TenantID: "tenant-a", Attribute: "span.enc.secret", ValuePrefix: "enc:v1:abcbdbc:",
+				Start: "now-7d", End: "now-6d", DryRun: dryRun,
+			}
+			require.NoError(t, cmd.validate())
+			mock := &mockSchedulerClient{}
+			_, err := cmd.submit(context.Background(), mock, nil)
+			require.NoError(t, err)
+			require.Equal(t, &tempopb.AttributeRedaction{Key: "span.enc.secret", ValuePrefix: "enc:v1:abcbdbc:"}, mock.capturedReq.AttributeRedaction)
+			require.Empty(t, mock.capturedReq.TraceIds)
+			require.Nil(t, mock.capturedReq.GetQuery())
+			require.Equal(t, cmd.startNano, mock.capturedReq.StartTimeUnixNano)
+			require.Equal(t, cmd.endNano, mock.capturedReq.EndTimeUnixNano)
+			wantMode := tempopb.RedactionMode_REDACTION_MODE_APPLY
+			if dryRun {
+				wantMode = tempopb.RedactionMode_REDACTION_MODE_DRY_RUN
+			}
+			require.Equal(t, wantMode, mock.capturedReq.Mode)
+			md, ok := metadata.FromOutgoingContext(mock.capturedCtx)
+			require.True(t, ok)
+			require.Equal(t, []string{"tenant-a"}, md["x-scope-orgid"])
+			require.Empty(t, mock.capturedReq.TenantId)
+		})
+	}
+}
+
 func TestRedactCmdValidate(t *testing.T) {
 	const q = `{resource.service_name = "x"}`
 
@@ -86,6 +116,19 @@ func TestRedactCmdValidate(t *testing.T) {
 		{"query only", redactCmd{Query: `{resource.service_name = "x"}`}, false},
 		{"both", redactCmd{TraceIDs: []string{"abc"}, Query: `{resource.service_name = "x"}`}, true},
 		{"neither", redactCmd{}, true},
+		{"span attribute", redactCmd{Attribute: "span.enc.secret", ValuePrefix: "enc:v1:abcbdbc:"}, false},
+		{"resource attribute", redactCmd{Attribute: "resource.service.name", ValuePrefix: "secret:"}, false},
+		{"attribute window", redactCmd{Attribute: "span.enc.secret", ValuePrefix: "enc:", Start: "now-7d", End: "now-6d"}, false},
+		{"missing prefix", redactCmd{Attribute: "span.enc.secret"}, true},
+		{"prefix without attribute", redactCmd{ValuePrefix: "enc:"}, true},
+		{"query with prefix", redactCmd{Query: q, ValuePrefix: "enc:"}, true},
+		{"trace IDs with prefix", redactCmd{TraceIDs: []string{"abc"}, ValuePrefix: "enc:"}, true},
+		{"empty span key", redactCmd{Attribute: "span.", ValuePrefix: "enc:"}, true},
+		{"empty resource key", redactCmd{Attribute: "resource.", ValuePrefix: "enc:"}, true},
+		{"unsupported scope", redactCmd{Attribute: "event.secret", ValuePrefix: "enc:"}, true},
+		{"unqualified key", redactCmd{Attribute: "secret", ValuePrefix: "enc:"}, true},
+		{"attribute and query", redactCmd{Attribute: "span.secret", ValuePrefix: "enc:", Query: q}, true},
+		{"attribute and trace IDs", redactCmd{Attribute: "span.secret", ValuePrefix: "enc:", TraceIDs: []string{"abc"}}, true},
 
 		// Window resolution. Both bounds must be given, ordered, and parseable; the resolved
 		// pair must also be usable, which is what the identical-spec cases below check.

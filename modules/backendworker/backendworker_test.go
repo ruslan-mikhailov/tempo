@@ -18,6 +18,7 @@ import (
 	"github.com/grafana/tempo/v3/modules/storage"
 	"github.com/grafana/tempo/v3/pkg/model"
 	"github.com/grafana/tempo/v3/pkg/tempopb"
+	v1_common "github.com/grafana/tempo/v3/pkg/tempopb/common/v1"
 	"github.com/grafana/tempo/v3/pkg/util/test"
 	"github.com/grafana/tempo/v3/tempodb"
 	"github.com/grafana/tempo/v3/tempodb/backend"
@@ -274,6 +275,60 @@ func TestProcessRedactionJobMissingBlockObservable(t *testing.T) {
 	require.NoError(t, err, "a missing block must complete as a non-fatal no-op")
 	after := testutil.ToFloat64(metricRedactionBlockMissing.WithLabelValues(tenant))
 	require.Equal(t, before+1, after, "a missing redaction block must be counted, not silently dropped")
+}
+
+// TestProcessAttributeRedactionJob exercises dispatch from a per-tenant job to
+// storage: dry-run counts the matching trace without rewriting, then apply
+// reports the same trace as rewritten.
+func TestProcessAttributeRedactionJob(t *testing.T) {
+	ctx := context.Background()
+	store, _, _ := newStore(ctx, t, t.TempDir())
+	const tenantID = "tenant-attribute-worker"
+	id := test.ValidTraceID(nil)
+	tr := test.MakeTraceWithSpanCount(1, 1, id)
+	tr.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes = append(
+		tr.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes,
+		&v1_common.KeyValue{Key: "enc.secret", Value: &v1_common.AnyValue{
+			Value: &v1_common.AnyValue_StringValue{StringValue: "enc:v1:abcbdbc:payload"},
+		}},
+	)
+	head, err := store.WAL().NewBlock(&backend.BlockMeta{BlockID: backend.NewUUID(), TenantID: tenantID}, model.CurrentEncoding)
+	require.NoError(t, err)
+	now := uint32(time.Now().Unix())
+	writeTraceToWal(t, head, model.MustNewSegmentDecoder(model.CurrentEncoding), id, tr, now, now)
+	block, err := store.CompleteBlock(ctx, head)
+	require.NoError(t, err)
+	store.PollNow(ctx)
+	require.Len(t, store.BlockMetas(tenantID), 1)
+
+	var got *tempopb.UpdateJobStatusRequest
+	w := &BackendWorker{
+		store: store,
+		backendScheduler: &mockScheduler{updateJob: func(_ context.Context, req *tempopb.UpdateJobStatusRequest, _ ...grpc.CallOption) (*tempopb.UpdateJobStatusResponse, error) {
+			got = req
+			return &tempopb.UpdateJobStatusResponse{Success: true}, nil
+		}},
+	}
+	rule := &tempopb.AttributeRedaction{Key: "span.enc.secret", ValuePrefix: "enc:v1:abcbdbc:"}
+	for _, mode := range []tempopb.RedactionMode{
+		tempopb.RedactionMode_REDACTION_MODE_DRY_RUN,
+		tempopb.RedactionMode_REDACTION_MODE_APPLY,
+	} {
+		err = w.processRedactionJob(ctx, &tempopb.NextJobResponse{
+			JobId: "attribute-job",
+			Detail: tempopb.JobDetail{
+				Tenant: tenantID,
+				Redaction: &tempopb.RedactionDetail{
+					BlockId:            block.BlockMeta().BlockID.String(),
+					AttributeRedaction: rule,
+					Mode:               mode,
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, tempopb.JobStatus_JOB_STATUS_SUCCEEDED, got.Status)
+		require.EqualValues(t, 1, got.Redaction.TracesFound)
+	}
 }
 
 func TestIsSharded(t *testing.T) {

@@ -167,6 +167,23 @@ func (c *Compactor) Compact(ctx context.Context, l log.Logger, r backend.Reader,
 		}
 
 		// make a new block if necessary
+		if c.opts.AttributeRedaction != nil {
+			transformed, changed, err := redactAttributeRow(sch, lowestObject, c.opts.AttributeRedaction, inputs[0].DedicatedColumns, !c.opts.AttributeRedactionScanOnly)
+			if err != nil {
+				return nil, fmt.Errorf("redacting trace %x: %w", lowestID, err)
+			}
+			if changed && c.opts.AttributeRedacted != nil {
+				c.opts.AttributeRedacted()
+			}
+			if c.opts.AttributeRedactionScanOnly {
+				pool.Put(lowestObject)
+				continue
+			}
+			if changed {
+				pool.Put(lowestObject)
+				lowestObject = transformed
+			}
+		}
 		if currentBlock == nil {
 			// Start with a copy and then customize
 			newMeta := &backend.BlockMeta{

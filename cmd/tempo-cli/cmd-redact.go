@@ -25,12 +25,14 @@ import (
 type redactCmd struct {
 	SchedulerAddr string `arg:"" help:"backend scheduler gRPC address (host:port)"`
 
-	TenantID string   `name:"tenant" required:"" help:"tenant ID"`
-	TraceIDs []string `name:"trace-id" help:"trace ID to redact (may be repeated; mutually exclusive with --query)"`
-	Query    string   `name:"query" help:"TraceQL query selecting traces to redact (mutually exclusive with --trace-id)"`
-	DryRun   bool     `name:"dry-run" default:"false" help:"evaluate and report match counts without rewriting any blocks"`
-	Start    string   `name:"start" help:"start of the redaction window: 'now', 'now-<dur>' (e.g. now-7d), or RFC3339. Must be given with --end; omit both for the whole tenant"`
-	End      string   `name:"end" help:"end of the redaction window. Same forms as --start. Must be given with --start"`
+	TenantID    string   `name:"tenant" required:"" help:"tenant ID"`
+	TraceIDs    []string `name:"trace-id" help:"trace ID to redact (may be repeated; mutually exclusive with --query and --attribute)"`
+	Query       string   `name:"query" help:"TraceQL query selecting traces to redact (mutually exclusive with --trace-id and --attribute)"`
+	Attribute   string   `name:"attribute" help:"scope-qualified attribute to redact: span.<key> or resource.<key>"`
+	ValuePrefix string   `name:"value-prefix" help:"literal prefix of string values to replace in full with [REDACTED]; requires --attribute"`
+	DryRun      bool     `name:"dry-run" default:"false" help:"evaluate and report match counts without rewriting any blocks"`
+	Start       string   `name:"start" help:"start of the redaction window: 'now', 'now-<dur>' (e.g. now-7d), or RFC3339. Must be given with --end; omit both for the whole tenant"`
+	End         string   `name:"end" help:"end of the redaction window. Same forms as --start. Must be given with --start"`
 
 	// startNano/endNano hold the window resolved by validate().
 	startNano int64
@@ -74,10 +76,9 @@ func (cmd *redactCmd) Run(_ *globalOptions) error {
 	return nil
 }
 
-// validate resolves the time window and enforces that the request is coherent: exactly one selector
-// (an explicit trace ID list or a TraceQL query, never both and never neither), a fully specified and
-// ordered window if one is given, and a window only alongside the query selector. The server enforces
-// all of it too; checking here fails fast before dialing and before a TLS handshake.
+// validate resolves the time window and requires exactly one operation: trace IDs, a TraceQL query,
+// or an attribute and value prefix. Windows are available for queries and attributes, not trace IDs.
+// Checking here fails fast before dialing or starting a TLS handshake.
 //
 // Resolving the window is a side effect: it populates cmd.startNano/endNano for submit().
 func (cmd *redactCmd) validate() error {
@@ -101,15 +102,27 @@ func (cmd *redactCmd) validate() error {
 			cmd.Start, time.Unix(0, cmd.startNano).UTC().Format(time.RFC3339Nano),
 			cmd.End, time.Unix(0, cmd.endNano).UTC().Format(time.RFC3339Nano))
 	}
-	// Selector coherence is checked before window/selector compatibility, so a request that gets both
-	// wrong is told about the more fundamental problem first.
+	// Selector coherence is checked before window compatibility.
 	hasIDs := len(cmd.TraceIDs) > 0
 	hasQuery := cmd.Query != ""
+	hasAttribute := cmd.Attribute != ""
+	if cmd.ValuePrefix != "" && !hasAttribute {
+		return errors.New("--value-prefix requires --attribute")
+	}
+	if hasAttribute {
+		scope, key, ok := strings.Cut(cmd.Attribute, ".")
+		if !ok || (scope != "span" && scope != "resource") || key == "" {
+			return errors.New("--attribute must be span.<key> or resource.<key> with a nonempty key")
+		}
+		if cmd.ValuePrefix == "" {
+			return errors.New("--attribute requires a nonempty --value-prefix")
+		}
+	}
 	switch {
-	case hasIDs && hasQuery:
-		return errors.New("--trace-id and --query are mutually exclusive")
-	case !hasIDs && !hasQuery:
-		return errors.New("one of --trace-id or --query must be provided")
+	case (hasIDs && hasQuery) || (hasIDs && hasAttribute) || (hasQuery && hasAttribute):
+		return errors.New("--trace-id, --query, and --attribute are mutually exclusive")
+	case !hasIDs && !hasQuery && !hasAttribute:
+		return errors.New("one of --trace-id, --query, or --attribute must be provided")
 	}
 
 	// The trace-ID path applies no time bound, so a window would delete each listed trace only from the
@@ -137,6 +150,8 @@ func (cmd *redactCmd) submit(ctx context.Context, c tempopb.BackendSchedulerClie
 		req.Selector = &tempopb.SubmitRedactionRequest_Query{
 			Query: &tempopb.TraceQLSelector{Query: cmd.Query},
 		}
+	} else if cmd.Attribute != "" {
+		req.AttributeRedaction = &tempopb.AttributeRedaction{Key: cmd.Attribute, ValuePrefix: cmd.ValuePrefix}
 	} else {
 		req.TraceIds = traceIDs
 	}

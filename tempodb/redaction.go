@@ -5,15 +5,13 @@ import (
 	"math"
 )
 
-// RedactionWindow bounds the per-block scan of a TraceQL redaction. Both bounds are unix nanoseconds;
-// the zero value is unbounded, matching every query match in the block regardless of timestamp.
+// RedactionWindow bounds the per-block scan of a query or attribute redaction.
+// Both bounds are unix nanoseconds; the zero value scans the whole block.
 //
-// Two limits are easy to misread and both destroy data:
-//
-//   - Overlap, not containment. A trace whose range merely intersects the window matches, and a matched
-//     trace is dropped whole, so its out-of-window spans go too.
-//   - Query selector only. The trace-ID path resolves IDs with no time bound; RedactBlock refuses that
-//     combination rather than accepting a window it would ignore.
+// A trace whose range intersects the window is selected in full: trace deletion
+// removes all its spans, and attribute redaction checks all its selected
+// attributes. The trace-ID path resolves IDs without a time bound, so RedactBlock
+// refuses that combination rather than silently ignoring the window.
 //
 // The bounds travel as named fields because transposing two adjacent int64 parameters fails silently:
 // an inverted window matches nothing and the job reports success.

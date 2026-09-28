@@ -1,6 +1,7 @@
 package backendscheduler
 
 import (
+	"strings"
 	"time"
 
 	"github.com/go-kit/log/level"
@@ -22,10 +23,10 @@ const blockTimeGranularity = time.Second
 // blockOverlapsWindow reports whether a block's data range overlaps [startNano, endNano], and whether
 // that answer had to be assumed. A zero bound is unbounded on that side, so 0/0 matches every block.
 //
-// Doubt resolves toward inclusion: for a query redaction the per-block scan bound decides what is
-// actually deleted, so an extra block costs I/O while a missing one silently leaves data the operator
-// asked to delete. A block whose recorded range is unusable is therefore included and reported as
-// indeterminate so the caller can count it.
+// Doubt resolves toward inclusion: for query deletion and attribute replacement the per-block scan
+// bound decides what is actually changed, so an extra block costs I/O while a missing one silently
+// leaves data the operator asked to change. A block whose recorded range is unusable is therefore
+// included and reported as indeterminate so the caller can count it.
 func blockOverlapsWindow(meta *backend.BlockMeta, startNano, endNano int64) (overlaps, indeterminate bool) {
 	if startNano == 0 && endNano == 0 {
 		return true, false // no window: every block is in scope, and the range is never consulted
@@ -121,23 +122,32 @@ const maxRedactionTraceIDs = 1000
 // error. Every check fails closed: on a redaction, a refused request destroys nothing while a
 // misinterpreted one cannot be undone.
 func validateRedactionRequest(req *tempopb.SubmitRedactionRequest, querySel *tempopb.TraceQLSelector) error {
-	// Exactly one selector. The proto reserves a single-member oneof for query; the XOR is enforced
-	// here until trace_ids migrates into it.
+	// Exactly one operation. The proto reserves a single-member oneof for query; trace_ids
+	// and attribute_redaction remain outside it and are checked explicitly here.
 	hasIDs := len(req.TraceIds) > 0
-	hasQuery := querySel.GetQuery() != "" // nil-safe
-	switch {
-	case hasIDs && hasQuery:
-		return status.Error(codes.InvalidArgument, "trace_ids and query are mutually exclusive")
-	case !hasIDs && !hasQuery:
-		return status.Error(codes.InvalidArgument, "one of trace_ids or query must be set")
-	case hasQuery:
+	hasQuery := querySel != nil
+	hasAttribute := req.AttributeRedaction != nil
+	if count := boolToInt(hasIDs) + boolToInt(hasQuery) + boolToInt(hasAttribute); count != 1 {
+		return status.Error(codes.InvalidArgument, "exactly one of trace_ids, query or attribute_redaction must be set")
+	}
+	if hasQuery {
 		if err := validateRedactionQuery(querySel.Query); err != nil {
 			return status.Error(codes.InvalidArgument, err.Error())
 		}
 	}
+	if hasAttribute {
+		rule := req.AttributeRedaction
+		if !((strings.HasPrefix(rule.Key, "span.") && len(rule.Key) > len("span.")) ||
+			(strings.HasPrefix(rule.Key, "resource.") && len(rule.Key) > len("resource."))) {
+			return status.Error(codes.InvalidArgument, "attribute_redaction.key must be span.<key> or resource.<key> with a nonempty key")
+		}
+		if rule.ValuePrefix == "" {
+			return status.Error(codes.InvalidArgument, "attribute_redaction.value_prefix must not be empty")
+		}
+	}
 
-	// Checked after the selector XOR so a request that also sets a query is told about the more
-	// fundamental problem first.
+	// Checked after the operation exclusivity so a request that also sets a query is told about
+	// the more fundamental problem first.
 	if len(req.TraceIds) > maxRedactionTraceIDs {
 		return status.Errorf(codes.InvalidArgument,
 			"too many trace_ids: %d exceeds the limit of %d; every job dispatch carries the whole list, so use a query selector instead",
@@ -178,4 +188,11 @@ func validateRedactionRequest(req *tempopb.SubmitRedactionRequest, querySel *tem
 	}
 
 	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

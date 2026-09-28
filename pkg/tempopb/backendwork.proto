@@ -14,9 +14,8 @@ service BackendScheduler {
   // Update job status
   rpc UpdateJob(UpdateJobStatusRequest) returns (UpdateJobStatusResponse) {}
 
-  // Submit a redaction request. The caller provides a tenant ID and trace IDs to remove.
-  // The scheduler discovers all blocks for the tenant and fans out one internal pending
-  // job per block.
+  // Submit a trace deletion or attribute replacement for the authenticated tenant.
+  // The scheduler discovers that tenant's blocks and fans out one job per block.
   rpc SubmitRedaction(SubmitRedactionRequest) returns (SubmitRedactionResponse) {}
 }
 
@@ -64,9 +63,18 @@ message TraceQLSelector {
   string query = 1;  // TraceQL expression
 }
 
+// AttributeRedaction replaces an entire matching string value for one scoped attribute.
+// value_prefix is matched literally, not as a regular expression.
+message AttributeRedaction {
+  option (gogoproto.equal) = true;
+  option (gogoproto.compare) = true;
+
+  string key = 1;           // span.<key> or resource.<key>
+  string value_prefix = 2;  // literal prefix of values to replace with [REDACTED]
+}
+
 // RedactionDetail contains fields for redaction jobs (one job per block).
-// TraceIds are the trace IDs to redact from the block; alternatively query selects
-// them via a TraceQL expression evaluated against the block.
+// TraceIds, query and attribute_redaction are mutually exclusive operations.
 message RedactionDetail {
   option (gogoproto.equal) = true;
   option (gogoproto.compare) = true;
@@ -79,6 +87,7 @@ message RedactionDetail {
   // scan. 0 means unbounded on that side.
   int64 start_time_unix_nano = 5;
   int64 end_time_unix_nano = 6;
+  AttributeRedaction attribute_redaction = 7; // replace matching attribute values
 }
 
 // JobDetail contains the specific details for each job type
@@ -119,7 +128,7 @@ message UpdateJobStatusResponse {
   bool success = 1;
 }
 
-// SubmitRedactionRequest is the user-facing API for redacting traces from a tenant.
+// SubmitRedactionRequest selects trace deletion or attribute replacement for a tenant.
 // The scheduler fans out one internal pending job per block for the authenticated tenant.
 // The tenant is sourced exclusively from the X-Scope-OrgID request header; the server
 // ignores tenant_id in the body to prevent cross-tenant escalation.
@@ -127,8 +136,8 @@ message SubmitRedactionRequest {
   string tenant_id = 1 [deprecated = true]; // ignored by the server; tenant is read from the request header
   repeated bytes trace_ids = 2;
   // selector is a single-member oneof for now, reserving room to migrate trace_ids into
-  // it later without an API break. It carries the TraceQL query selector; query and
-  // trace_ids are mutually exclusive, enforced at submission.
+  // it later without an API break. Trace IDs, query and attribute_redaction are mutually
+  // exclusive, enforced at submission.
   oneof selector {
     TraceQLSelector query = 3;
   }
@@ -139,6 +148,7 @@ message SubmitRedactionRequest {
   // client (e.g. the CLI accepts Grafana-style now-7d) and frozen here, so it never chases ingest.
   int64 start_time_unix_nano = 5;
   int64 end_time_unix_nano = 6;
+  AttributeRedaction attribute_redaction = 7;
 }
 
 message SubmitRedactionResponse {
@@ -152,12 +162,13 @@ message SubmitRedactionResponse {
 message RedactionResult {
   option (gogoproto.equal) = true;
 
-  // traces_found is the number of target trace IDs that were present and removed
-  // from the block. Zero means the block was scanned and found clean.
+  // traces_found is the number of traces matched in the block: removed traces for
+  // trace deletion, or traces with at least one replaced attribute value. A dry run
+  // counts matches without changing storage. Zero means the block was scanned clean.
   int32 traces_found = 1;
 }
 
-// RedactionBatch holds the trace IDs for an in-flight redaction submission.
+// RedactionBatch holds the operation for an in-flight redaction submission.
 // All pending block jobs for a tenant share one batch to avoid copying the trace ID
 // list into every job (which could be millions of jobs for large tenants).
 // Persisted locally as batches.pb alongside the shard files.
@@ -176,7 +187,7 @@ message RedactionBatch {
   // rescan_after_unix_nano is the earliest time at which the scheduler should
   // perform the rescan described above. Zero means no rescan is pending.
   int64 rescan_after_unix_nano = 6;
-  // query, when set, selects traces via a TraceQL expression instead of trace_ids.
+  // query, when set, selects traces via TraceQL instead of trace_ids or attribute_redaction.
   // Stored in the manifest for the lifetime of the redaction and injected into each
   // per-block job.
   TraceQLSelector query = 7;
@@ -193,6 +204,7 @@ message RedactionBatch {
   // Stored on the batch and injected into each per-block job. 0 means unbounded on that side.
   int64 start_time_unix_nano = 10;
   int64 end_time_unix_nano = 11;
+  AttributeRedaction attribute_redaction = 12; // stored and injected into each per-block job
 }
 
 // RedactionBatches is the top-level container written to batches.pb.

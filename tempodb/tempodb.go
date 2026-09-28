@@ -124,6 +124,7 @@ type Compactor interface {
 	RetainTenantWithConfig(ctx context.Context, tenantID string, cfg *CompactorConfig, sharder CompactorSharder, overrides CompactorOverrides)
 
 	RedactBlock(ctx context.Context, meta *backend.BlockMeta, tenantID string, traceIDs []common.ID, query string, mode tempopb.RedactionMode, window RedactionWindow) (rewrote bool, found int, newMeta *backend.BlockMeta, err error)
+	RedactBlockAttributes(ctx context.Context, meta *backend.BlockMeta, tenantID string, rule *tempopb.AttributeRedaction, mode tempopb.RedactionMode, window RedactionWindow) (rewrote bool, found int, newMeta *backend.BlockMeta, err error)
 }
 
 type CompactorSharder interface {

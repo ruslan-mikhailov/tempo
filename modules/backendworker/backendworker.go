@@ -391,30 +391,45 @@ func (w *BackendWorker) processRedactionJob(ctx context.Context, resp *tempopb.N
 		return w.completeRedactionJob(ctx, resp.JobId, 0)
 	}
 
-	traceIDs := make([]common.ID, 0, len(resp.Detail.Redaction.TraceIds))
-	for _, b := range resp.Detail.Redaction.TraceIds {
-		if len(b) > 0 {
-			traceIDs = append(traceIDs, common.ID(b))
+	rd := resp.Detail.Redaction
+	query := rd.GetQuery().GetQuery() // nil-safe: "" when no query selector
+	rule := rd.GetAttributeRedaction()
+	mode := rd.GetMode()
+	window := tempodb.RedactionWindow{
+		StartNano: rd.GetStartTimeUnixNano(),
+		EndNano:   rd.GetEndTimeUnixNano(),
+	}
+
+	var tracesFound int
+	var err error
+	if rule != nil {
+		if len(rd.TraceIds) != 0 || query != "" {
+			return w.failJob(ctx, resp.JobId, "received attribute redaction job with a trace deletion selector")
+		}
+		// Do not log the prefix: it can itself contain sensitive data.
+		level.Debug(log.Logger).Log("msg", "processing attribute redaction job", "job_id", resp.JobId, "block_id", blockIDStr, "mode", mode.String())
+		_, tracesFound, _, err = w.store.RedactBlockAttributes(ctx, meta, tenantID, rule, mode, window)
+		if err != nil {
+			return w.failJob(ctx, resp.JobId, fmt.Sprintf("redact block attributes: %v", err))
+		}
+	} else {
+		traceIDs := make([]common.ID, 0, len(rd.TraceIds))
+		for _, b := range rd.TraceIds {
+			if len(b) > 0 {
+				traceIDs = append(traceIDs, common.ID(b))
+			}
+		}
+
+		// Log only whether a query selector is present, not the query text: for a
+		// privacy-motivated feature the query can embed sensitive attribute values.
+		level.Debug(log.Logger).Log("msg", "processing redaction job", "job_id", resp.JobId, "block_id", blockIDStr, "trace_ids_count", len(traceIDs), "has_query", query != "", "mode", mode.String())
+		_, tracesFound, _, err = w.store.RedactBlock(ctx, meta, tenantID, traceIDs, query, mode, window)
+		if err != nil {
+			return w.failJob(ctx, resp.JobId, fmt.Sprintf("redact block: %v", err))
 		}
 	}
 
-	query := resp.Detail.Redaction.GetQuery().GetQuery() // nil-safe: "" when no query selector
-	mode := resp.Detail.Redaction.GetMode()
-	window := tempodb.RedactionWindow{
-		StartNano: resp.Detail.Redaction.GetStartTimeUnixNano(),
-		EndNano:   resp.Detail.Redaction.GetEndTimeUnixNano(),
-	}
-
-	// Log only whether a query selector is present, not the query text: for a
-	// privacy-motivated feature the query can embed sensitive attribute values.
-	level.Debug(log.Logger).Log("msg", "processing redaction job", "job_id", resp.JobId, "block_id", blockIDStr, "trace_ids_count", len(traceIDs), "has_query", query != "", "mode", mode.String())
-
-	_, tracesFound, _, err := w.store.RedactBlock(ctx, meta, tenantID, traceIDs, query, mode, window)
-	if err != nil {
-		return w.failJob(ctx, resp.JobId, fmt.Sprintf("redact block: %v", err))
-	}
-
-	level.Debug(log.Logger).Log("msg", "redaction block processed", "job_id", resp.JobId, "block_id", blockIDStr, "rewrote", tracesFound > 0, "traces_found", tracesFound)
+	level.Debug(log.Logger).Log("msg", "redaction block processed", "job_id", resp.JobId, "block_id", blockIDStr, "traces_found", tracesFound)
 	return w.completeRedactionJob(ctx, resp.JobId, tracesFound)
 }
 

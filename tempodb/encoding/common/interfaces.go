@@ -77,13 +77,18 @@ type CompactionOptions struct {
 	// of the trace to be compacted. If the function returns true, the trace will be dropped.
 	DropObject func(ID) bool
 
-	ObjectsCombined   func(compactionLevel, objects int)
-	ObjectsWritten    func(compactionLevel, objects int)
-	BytesWritten      func(compactionLevel, bytes int)
-	SpansDiscarded    func(traceID string, rootSpanName string, rootServiceName string, spans int)
-	DisconnectedTrace func()
-	RootlessTrace     func()
-	DedupedSpans      func(replFactor, dedupedSpans int)
+	// AttributeRedaction transforms matching parquet rows. ScanOnly counts matches
+	// without creating any output blocks; AttributeRedacted counts traces, not values.
+	AttributeRedaction         *AttributeRedactionRule
+	AttributeRedactionScanOnly bool
+	AttributeRedacted          func()
+	ObjectsCombined            func(compactionLevel, objects int)
+	ObjectsWritten             func(compactionLevel, objects int)
+	BytesWritten               func(compactionLevel, bytes int)
+	SpansDiscarded             func(traceID string, rootSpanName string, rootServiceName string, spans int)
+	DisconnectedTrace          func()
+	RootlessTrace              func()
+	DedupedSpans               func(replFactor, dedupedSpans int)
 }
 
 type Iterator interface {

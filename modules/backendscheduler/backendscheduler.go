@@ -346,7 +346,7 @@ func (s *BackendScheduler) Next(ctx context.Context, req *tempopb.NextJobRequest
 						drop = true
 					}
 				case tempopb.JobType_JOB_TYPE_REDACTION:
-					// Resolve trace IDs from the batch manifest.
+					// Resolve the operation from the batch manifest.
 					// Drop if the batch no longer exists (cancelled or already cleaned up).
 					batch := s.work.GetBatch(j.Tenant())
 					if batch == nil {
@@ -358,10 +358,11 @@ func (s *BackendScheduler) Next(ctx context.Context, req *tempopb.NextJobRequest
 						s.work.ReleaseRedactionInFlight(j.Tenant())
 						drop = true
 					} else if j.JobDetail.Redaction != nil {
-						// Inject the batch's selector (trace IDs or query) and mode so the
-						// worker can resolve and act on the block without re-reading the batch.
+						// Inject the batch's operation and mode so the worker can act on the
+						// block without re-reading the batch.
 						j.JobDetail.Redaction.TraceIds = batch.TraceIds
 						j.JobDetail.Redaction.Query = batch.Query
+						j.JobDetail.Redaction.AttributeRedaction = batch.AttributeRedaction
 						j.JobDetail.Redaction.Mode = batch.Mode
 						j.JobDetail.Redaction.StartTimeUnixNano = batch.StartTimeUnixNano
 						j.JobDetail.Redaction.EndTimeUnixNano = batch.EndTimeUnixNano
@@ -483,8 +484,8 @@ func (s *BackendScheduler) UpdateJob(ctx context.Context, req *tempopb.UpdateJob
 // field on the request body is ignored. This prevents a cross-tenant escalation where an
 // authenticated caller could supply a different tenant in the body and trigger redaction
 // against that tenant's blocks. The method snapshots the tenant's block list and enqueues
-// one pending job per block. Trace IDs are stored in a shared batch manifest rather than
-// in each job to avoid copying the list across potentially millions of pending jobs.
+// one pending job per block. The operation is stored in a shared batch manifest rather than
+// in each job, avoiding a copy of a potentially large trace ID list across pending jobs.
 func (s *BackendScheduler) SubmitRedaction(ctx context.Context, req *tempopb.SubmitRedactionRequest) (*tempopb.SubmitRedactionResponse, error) {
 	_, span := tracer.Start(ctx, "SubmitRedaction")
 	defer span.End()
@@ -520,7 +521,7 @@ func (s *BackendScheduler) SubmitRedaction(ctx context.Context, req *tempopb.Sub
 	)
 
 	// Snapshot the block list for this tenant. One pending job is created per block;
-	// the worker checks whether the block actually contains any of the trace IDs.
+	// the worker checks whether the block contains any matching traces or values.
 	metas := s.store.BlockMetas(tenant)
 	if len(metas) == 0 {
 		return nil, status.Error(codes.NotFound, "no blocks found for tenant")
@@ -626,21 +627,22 @@ func (s *BackendScheduler) SubmitRedaction(ctx context.Context, req *tempopb.Sub
 				BatchId: batchID,
 				Redaction: &tempopb.RedactionDetail{
 					BlockId: meta.BlockID.String(),
-					// TraceIds intentionally empty here — populated from batch in Next().
+					// The operation is intentionally empty here — populated from the batch in Next().
 				},
 			},
 		})
 	}
 
 	batch := &tempopb.RedactionBatch{
-		BatchId:           batchID,
-		TenantId:          tenant,
-		TraceIds:          req.TraceIds,
-		Query:             querySel,
-		Mode:              req.Mode,
-		StartTimeUnixNano: req.StartTimeUnixNano,
-		EndTimeUnixNano:   req.EndTimeUnixNano,
-		CreatedAtUnixNano: time.Now().UnixNano(),
+		BatchId:            batchID,
+		TenantId:           tenant,
+		TraceIds:           req.TraceIds,
+		Query:              querySel,
+		AttributeRedaction: req.AttributeRedaction,
+		Mode:               req.Mode,
+		StartTimeUnixNano:  req.StartTimeUnixNano,
+		EndTimeUnixNano:    req.EndTimeUnixNano,
+		CreatedAtUnixNano:  time.Now().UnixNano(),
 	}
 	// Only apply-mode batches arm a rescan. A dry-run rewrites nothing, so there is no output
 	// block to re-cover once a skipped compaction finishes; a rescan would only re-count and

@@ -615,3 +615,115 @@ func TestSubmitRedactionDryRunArmsNoRescan(t *testing.T) {
 		})
 	}
 }
+
+func TestAttributeRedactionRequestValidation(t *testing.T) {
+	rule := func(key, prefix string) *tempopb.AttributeRedaction {
+		return &tempopb.AttributeRedaction{Key: key, ValuePrefix: prefix}
+	}
+	query := &tempopb.SubmitRedactionRequest_Query{Query: &tempopb.TraceQLSelector{Query: `{span.name = "checkout"}`}}
+	for _, tc := range []struct {
+		name string
+		req  *tempopb.SubmitRedactionRequest
+	}{
+		{"missing key", &tempopb.SubmitRedactionRequest{AttributeRedaction: rule("", "enc:v1:abcbdbc:")}},
+		{"empty span key", &tempopb.SubmitRedactionRequest{AttributeRedaction: rule("span.", "enc:v1:abcbdbc:")}},
+		{"empty resource key", &tempopb.SubmitRedactionRequest{AttributeRedaction: rule("resource.", "enc:v1:abcbdbc:")}},
+		{"unscoped key", &tempopb.SubmitRedactionRequest{AttributeRedaction: rule("enc.secret", "enc:v1:abcbdbc:")}},
+		{"unsupported scope", &tempopb.SubmitRedactionRequest{AttributeRedaction: rule("event.enc.secret", "enc:v1:abcbdbc:")}},
+		{"empty prefix", &tempopb.SubmitRedactionRequest{AttributeRedaction: rule("span.enc.secret", "")}},
+		{"trace ids and rule", &tempopb.SubmitRedactionRequest{TraceIds: [][]byte{{1}}, AttributeRedaction: rule("span.enc.secret", "enc:v1:abcbdbc:")}},
+		{"query and rule", &tempopb.SubmitRedactionRequest{Selector: query, AttributeRedaction: rule("span.enc.secret", "enc:v1:abcbdbc:")}},
+		{"unknown mode", &tempopb.SubmitRedactionRequest{AttributeRedaction: rule("span.enc.secret", "enc:v1:abcbdbc:"), Mode: 99}},
+		{"one-sided window", &tempopb.SubmitRedactionRequest{AttributeRedaction: rule("span.enc.secret", "enc:v1:abcbdbc:"), StartTimeUnixNano: time.Now().UnixNano()}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateRedactionRequest(tc.req, tc.req.GetQuery())
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
+			require.NotContains(t, err.Error(), "enc:v1:abcbdbc:", "sensitive prefixes must not be echoed in errors")
+		})
+	}
+	for _, key := range []string{"span.enc.secret", "resource.enc.secret"} {
+		req := &tempopb.SubmitRedactionRequest{AttributeRedaction: rule(key, "enc:v1:abcbdbc:")}
+		require.NoError(t, validateRedactionRequest(req, req.GetQuery()))
+	}
+	// The original trace ID and query selectors remain valid.
+	require.NoError(t, validateRedactionRequest(&tempopb.SubmitRedactionRequest{TraceIds: [][]byte{{1}}}, nil))
+	require.NoError(t, validateRedactionRequest(&tempopb.SubmitRedactionRequest{Selector: query}, query.Query))
+}
+
+func TestAttributeRedactionPersistsAndDispatchesForAuthenticatedTenant(t *testing.T) {
+	cfg := Config{}
+	cfg.RegisterFlagsAndApplyDefaults("", &flag.FlagSet{})
+	cfg.LocalWorkPath = t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	store, rr, ww := newStore(ctx, t, cfg.LocalWorkPath)
+	t.Cleanup(func() {
+		cancel()
+		store.Shutdown()
+	})
+	limits, err := overrides.NewOverrides(overrides.Config{Defaults: overrides.Overrides{}}, nil, prometheus.NewRegistry())
+	require.NoError(t, err)
+	s, err := New(cfg, store, limits, rr, ww)
+	require.NoError(t, err)
+
+	tenants := []string{"tenant-span-attribute", "tenant-resource-attribute"}
+	keys := []string{"span.enc.secret", "resource.enc.secret"}
+	for _, tenant := range tenants {
+		writeTenantBlocks(ctx, t, backend.NewWriter(ww), tenant, 1)
+	}
+	time.Sleep(300 * time.Millisecond) // await the blocklist poll before submitting
+
+	for i, tenant := range tenants {
+		rule := &tempopb.AttributeRedaction{Key: keys[i], ValuePrefix: "enc:v1:abcbdbc:"}
+		req := &tempopb.SubmitRedactionRequest{
+			TenantId:           tenants[1-i], // the body tenant must not override authenticated context
+			AttributeRedaction: rule,
+			Mode:               tempopb.RedactionMode_REDACTION_MODE_DRY_RUN,
+		}
+		wire, err := req.Marshal()
+		require.NoError(t, err)
+		var decoded tempopb.SubmitRedactionRequest
+		require.NoError(t, decoded.Unmarshal(wire))
+		require.Equal(t, rule, decoded.AttributeRedaction)
+		resp, err := s.SubmitRedaction(user.InjectOrgID(ctx, tenant), &decoded)
+		require.NoError(t, err)
+		require.EqualValues(t, 1, resp.JobsCreated)
+		batch := s.work.GetBatch(tenant)
+		require.NotNil(t, batch)
+		require.Equal(t, tenant, batch.TenantId)
+		require.Equal(t, rule, batch.AttributeRedaction)
+		require.Empty(t, batch.TraceIds)
+		require.Nil(t, batch.Query)
+	}
+	require.NoError(t, s.work.FlushBatchesToLocal(ctx, cfg.LocalWorkPath))
+	require.NoError(t, s.work.FlushToLocal(ctx, cfg.LocalWorkPath, nil))
+
+	restarted, err := New(cfg, store, limits, rr, ww)
+	require.NoError(t, err)
+	require.NoError(t, restarted.work.LoadFromLocal(ctx, cfg.LocalWorkPath))
+	require.NoError(t, restarted.work.LoadBatchesFromLocal(ctx, cfg.LocalWorkPath))
+	for i, tenant := range tenants {
+		require.Equal(t, keys[i], restarted.work.GetBatch(tenant).AttributeRedaction.Key)
+	}
+	for range tenants {
+		j := restarted.work.NextPendingJob(tempopb.JobType_JOB_TYPE_REDACTION)
+		require.NotNil(t, j)
+		require.Nil(t, j.JobDetail.Redaction.AttributeRedaction, "pending jobs must resolve rules from the persisted batch")
+		restarted.mergedJobs <- j
+		resp, err := restarted.Next(ctx, &tempopb.NextJobRequest{WorkerId: "attribute-worker"})
+		require.NoError(t, err)
+		rule := resp.Detail.Redaction.AttributeRedaction
+		require.NotNil(t, rule)
+		tenant := resp.Detail.Tenant
+		require.Contains(t, tenants, tenant)
+		require.Equal(t, restarted.work.GetBatch(tenant).AttributeRedaction, rule)
+		require.Equal(t, tempopb.RedactionMode_REDACTION_MODE_DRY_RUN, resp.Detail.Redaction.Mode)
+		require.Empty(t, resp.Detail.Redaction.TraceIds)
+		require.Nil(t, resp.Detail.Redaction.Query)
+		wire, err := resp.Detail.Redaction.Marshal()
+		require.NoError(t, err)
+		var decoded tempopb.RedactionDetail
+		require.NoError(t, decoded.Unmarshal(wire))
+		require.Equal(t, rule, decoded.AttributeRedaction)
+	}
+}

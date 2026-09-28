@@ -1,0 +1,6 @@
+change_type: feature
+component: tempo-cli
+note: Redact matching span or resource attribute values in stored traces without deleting the traces.
+issues: []
+subtext:
+user: thedevdruid

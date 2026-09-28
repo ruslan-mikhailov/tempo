@@ -1006,10 +1006,10 @@ tempo-cli rewrite-blocks drop-traces --drop-trace --backend=local --bucket=./cmd
 
 ## Redact traces
 
-Remove traces containing personally identifiable information or other sensitive data from object storage without waiting for retention to expire.
+Remove traces containing sensitive data, or replace selected sensitive attribute values in stored traces, without waiting for retention to expire.
 
-The `redact` command submits a redaction request to the [backend scheduler](/docs/tempo/<TEMPO_VERSION>/reference-tempo-architecture/components/compaction/#backend-scheduler). 
-The scheduler creates jobs that rewrite affected blocks in object storage to remove the specified traces. 
+The `redact` command submits a redaction request to the [backend scheduler](/docs/tempo/<TEMPO_VERSION>/reference-tempo-architecture/components/compaction/#backend-scheduler).
+The scheduler creates jobs that rewrite affected blocks in object storage.
 Unlike [`drop-traces`](#drop-traces-by-id), which operates directly on object storage from the CLI, `redact` delegates the work to the backend scheduler over gRPC.
 
 ```bash
@@ -1020,6 +1020,10 @@ tempo-cli redact --tenant=<TENANT_ID> --trace-id=<TRACE_ID> [--trace-id=<TRACE_I
 tempo-cli redact --tenant=<TENANT_ID> --query=<TRACEQL_QUERY> [--start=<START> --end=<END>] <scheduler-address>
 ```
 
+```bash
+tempo-cli redact --tenant=<TENANT_ID> --attribute=span.<KEY> --value-prefix=<PREFIX> [--start=<START> --end=<END>] <scheduler-address>
+```
+
 Arguments:
 
 - `scheduler-address` The backend scheduler gRPC address (`host:port`).
@@ -1027,16 +1031,18 @@ Arguments:
 Options:
 
 - `--tenant <value>` **(required)** Tenant ID.
-- `--trace-id <value>` Trace ID to redact, in hex format. Repeat the flag for several traces in one request (`--trace-id=<ID> --trace-id=<ID>`, not comma-separated), up to 1000. Every job the redaction creates carries the whole list, so a longer list costs one copy per block; use `--query` instead. Mutually exclusive with `--query`.
-- `--query <value>` TraceQL query selecting the traces to redact, for example `{ span.http.status_code = 500 }`. Mutually exclusive with `--trace-id`. The query is restricted to a single spanset filter: `=` comparisons on the matched span's own `resource.*` or `span.*` attributes, joined by `&&` or `||`. Regular expressions, `!=` or ordered comparisons, `parent.`-scoped attributes, and pipelines or aggregates aren't supported.
-- `--dry-run` Evaluate the selector and report match counts without rewriting any blocks (default: `false`).
-- `--start <value>` Start of the time window. Accepts `now`, a relative offset such as `now-7d`, or an RFC3339 timestamp. Must be given with `--end`, must be before `--end`, and cannot be combined with `--trace-id`. Omit both bounds to redact the whole tenant.
+- `--trace-id <value>` Trace ID to redact, in hex format. Repeat the flag for several traces in one request (`--trace-id=<ID> --trace-id=<ID>`, not comma-separated), up to 1000. Every job the redaction creates carries the whole list, so a longer list costs one copy per block; use `--query` instead. Mutually exclusive with `--query` and `--attribute`.
+- `--query <value>` TraceQL query selecting the traces to redact, for example `{ span.http.status_code = 500 }`. Mutually exclusive with `--trace-id` and `--attribute`. The query is restricted to a single spanset filter: `=` comparisons on the matched span's own `resource.*` or `span.*` attributes, joined by `&&` or `||`. Regular expressions, `!=` or ordered comparisons, `parent.`-scoped attributes, and pipelines or aggregates aren't supported.
+- `--attribute <value>` Scope-qualified attribute key (`span.<key>` or `resource.<key>`) whose string values should be redacted. Requires `--value-prefix`; cannot be combined with `--trace-id` or `--query`.
+- `--value-prefix <value>` Nonempty literal prefix of the string value to match. Requires `--attribute`; matching values are replaced in full with `[REDACTED]`, not just the matching prefix.
+- `--dry-run` Count matching traces without rewriting any blocks (default: `false`).
+- `--start <value>` Start of the time window. Accepts `now`, a relative offset such as `now-7d`, or an RFC3339 timestamp. Must be given with `--end`, must be before `--end`, and cannot be combined with `--trace-id`. Omit both bounds to cover the whole tenant.
 - `--end <value>` End of the time window. Same forms as `--start`. Must be given with `--start`.
 - `--tls` Use TLS for the gRPC connection (default: `false`).
 - `--tls-server-name <value>` Override the TLS server name (SNI).
 - `--tls-ca <value>` Path to a PEM-encoded CA certificate file.
 
-You must provide exactly one of `--trace-id` or `--query`. Providing both, or neither, returns an error before the request is submitted.
+Provide exactly one operation: `--trace-id`, `--query`, or `--attribute` together with `--value-prefix`. Invalid combinations return an error before the CLI connects to the scheduler. The tenant is taken from the authenticated `X-Scope-OrgID` request metadata, not from the request body.
 
 A tenant can have only one redaction in progress at a time, dry runs included.
 A submission made while an earlier one is still running, or still in its quiescence period, is rejected.
@@ -1057,6 +1063,23 @@ jobs_created: <COUNT>
 mode:         dry-run (jobs will report match counts; no blocks will be rewritten)
 ```
 
+### Redact attribute values
+
+For example, replace the entire string value of `span.enc.secret` when it starts with the literal prefix `enc:v1:abcbdbc:`:
+
+```bash
+tempo-cli redact --tenant=my-tenant --attribute=span.enc.secret --value-prefix='enc:v1:abcbdbc:' localhost:9095
+```
+
+This leaves the trace, its trace ID, spans, and other attributes intact; it does not delete the trace or replace just the prefix. Use `resource.<key>` for a resource attribute instead. The rule only affects the selected tenant. Add `--dry-run` to count traces with at least one matching value without changing blocks; counts are per trace, not per attribute. `--start` and `--end` can limit the scan to a time window.
+
+Only string values with the specified prefix are replaced. Redaction of stored blocks is irreversible; values in ingesters or traces arriving after the run are not affected. A cached search result may remain stale until its cache entry expires. Submit attribute rules only after the scheduler and every worker understand them: older workers may silently ignore the rule.
+
+### Submit through the gRPC API
+
+For the endpoint, request fields, tenant isolation, example, and response,
+refer to [Submit attribute redaction (gRPC)](../../api_docs/#submit-attribute-redaction-grpc).
+
 ### Redact a time window
 
 A redaction with no window covers every block the tenant has, which keeps the tenant's compaction paused for the whole run and lets its block list grow.
@@ -1070,15 +1093,17 @@ Both bounds are inclusive and must both be supplied. Blocks whose data range ove
 as are blocks whose recorded range is unusable — those are included rather than skipped, so that a block
 whose timestamps cannot be judged is never silently left behind.
 
-Inside each block the window bounds the scan, and a trace is redacted if any part of it overlaps: a trace
-that starts before the window and ends inside it is removed in full, including its earlier spans.
+Inside each block, a trace is selected when any part of it overlaps the window.
+Trace deletion removes the selected trace in full, including its earlier spans.
+Attribute redaction replaces matching values throughout the selected trace;
+out-of-window traces are unchanged.
 
 A window cannot be combined with `--trace-id`. The window scopes which blocks are read and is not applied
 per trace, so the pair would remove each listed trace only from the blocks that happen to overlap and leave
 the rest of it in place while reporting success. Redact by trace ID without a window.
 
 The window is resolved to absolute timestamps when the command runs, so a long redaction does not drift
-forward into data that arrived after it started. Traces outside every window you run are left in place.
+forward into data that arrived after it started. Traces outside every window you run are left unchanged.
 
 Repeat the command for each slice, but expect to wait between slices. A finished redaction is held briefly
 before it is cleared, and a second submission for the same tenant is rejected with `AlreadyExists` until
