@@ -536,6 +536,16 @@ func createSpanIterators(
 	}
 
 	for _, cond := range conditions {
+		if cond.Op == traceql.OpContainsSequence ||
+			(cond.Op == traceql.OpNone && len(cond.Attribute.Name) >= 3 && cond.Attribute.Name[:3] == "bi.") {
+			if c, ok := columnMapping.get(cond.Attribute.Name); ok {
+				if err := checkLegacySequenceColumn(makeIter, c.ColumnPath); err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			optional = append(optional, createSequenceAttributeIterator(makeIter, cond.Attribute.Name))
+			continue
+		}
 		// Intrinsic?
 		switch cond.Attribute.Intrinsic {
 		case traceql.IntrinsicNone:

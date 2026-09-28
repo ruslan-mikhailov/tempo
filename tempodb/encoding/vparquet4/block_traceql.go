@@ -1111,6 +1111,12 @@ func checkConditions(conditions []traceql.Condition) error {
 				return fmt.Errorf("operation %v must have exactly 1 argument. condition: %+v", cond.Op, cond)
 			}
 
+		case traceql.OpContainsSequence:
+			if opCount != 1 || cond.Operands[0].Type != traceql.TypeStringArray ||
+				cond.Attribute.Scope != traceql.AttributeScopeSpan {
+				return fmt.Errorf("@> requires one span string-array operand")
+			}
+
 		case traceql.OpNotExists:
 			if opCount != 0 {
 				return fmt.Errorf("operation %v must have 0 arguments. condition: %+v", cond.Op, cond)
@@ -1996,6 +2002,13 @@ func createSpanIterator(makeIter, makeNilIter makeIterFn, innerIterators []parqu
 	}
 
 	for _, cond := range conditions {
+		if cond.Op == traceql.OpContainsSequence ||
+			(cond.Op == traceql.OpNone && len(cond.Attribute.Name) >= 3 && cond.Attribute.Name[:3] == "bi.") {
+			// v4 dedicated columns are scalar-only. Array values, even for names
+			// configured as dedicated, are stored in the generic attributes.
+			iters = append(iters, createSequenceAttributeIterator(makeIter, cond.Attribute.Name))
+			continue
+		}
 		// Intrinsic?
 		switch cond.Attribute.Intrinsic {
 		case traceql.IntrinsicSpanID:
@@ -3016,6 +3029,43 @@ func createBoolPredicate(op traceql.Operator, operands traceql.Operands) (parque
 	default:
 		return nil, fmt.Errorf("oparand is not bool or bool array: %+v", operands[0].EncodeToString(false))
 	}
+}
+
+// createSequenceAttributeIterator reads the whole array from one keyed attribute.
+// Filtering individual string elements would change both the order and length
+// seen by the TraceQL evaluator.
+func createSequenceAttributeIterator(makeIter makeIterFn, name string) parquetquery.Iterator {
+	return parquetquery.NewJoinIterator(DefinitionLevelResourceSpansILSSpanAttrs,
+		[]parquetquery.Iterator{
+			makeIter(columnPathSpanAttrKey, parquetquery.NewStringEqualPredicate(name), "key"),
+			makeIter(FieldSpanAttrIsArray, parquetquery.NewBoolEqualPredicate(true), "isArray"),
+			makeIter(columnPathSpanAttrString, nil, "string"),
+		},
+		&sequenceAttributeCollector{name: name},
+		parquetquery.WithPool(pqAttrPool))
+}
+
+type sequenceAttributeCollector struct {
+	name   string
+	values []string
+}
+
+func (c *sequenceAttributeCollector) String() string { return "sequenceAttributeCollector" }
+
+func (c *sequenceAttributeCollector) KeepGroup(res *parquetquery.IteratorResult) bool {
+	c.values = c.values[:0]
+	for _, e := range res.Entries {
+		if e.Key == "string" && !e.Value.IsNull() {
+			c.values = append(c.values, unsafeToString(e.Value.Bytes()))
+		}
+	}
+	if len(c.values) == 0 {
+		return false
+	}
+	res.Entries = res.Entries[:0]
+	res.OtherEntries = res.OtherEntries[:0]
+	res.AppendOtherValue(c.name, traceql.NewStaticStringArray(util.Clone(c.values)))
+	return true
 }
 
 func createAttributeIterator(makeIter makeIterFn, conditions []traceql.Condition,

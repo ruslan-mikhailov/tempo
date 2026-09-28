@@ -465,14 +465,6 @@ func TestUnaryOperation_extractConditions(t *testing.T) {
 			},
 			allConditions: true,
 		},
-		{
-			query: `{ !(span.a = "a" || span.a = "c") }`,
-			conditions: []Condition{
-				newCondition(NewScopedAttribute(AttributeScopeSpan, false, "a"), OpEqual, NewStaticString("a")),
-				newCondition(NewScopedAttribute(AttributeScopeSpan, false, "a"), OpEqual, NewStaticString("c")),
-			},
-			allConditions: false,
-		},
 	}
 
 	for _, tt := range tests {

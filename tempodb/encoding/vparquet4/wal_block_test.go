@@ -3,9 +3,11 @@ package vparquet4
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/grafana/tempo/v3/pkg/model"
 	"github.com/grafana/tempo/v3/pkg/model/trace"
 	"github.com/grafana/tempo/v3/pkg/tempopb"
+	v1_common "github.com/grafana/tempo/v3/pkg/tempopb/common/v1"
 	"github.com/grafana/tempo/v3/pkg/traceql"
 	"github.com/grafana/tempo/v3/pkg/util/test"
 	"github.com/grafana/tempo/v3/tempodb/backend"
@@ -573,4 +576,38 @@ func BenchmarkWalSearchTagValues(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestProtectedSubstringWALArrayFetch(t *testing.T) {
+	const prefix = "bi:v1:630dcd2966c4336691125448bbb25b4f:"
+	a, b := prefix+strings.Repeat("A", 43), prefix+strings.Repeat("B", 42)+"A"
+	meta := backend.NewBlockMeta("fake", uuid.New(), VersionString)
+	meta.DedicatedColumns = backend.DedicatedColumns{{Scope: backend.DedicatedColumnScopeSpan, Name: "bi.secret", Type: backend.DedicatedColumnTypeString}}
+	w, err := createWALBlock(meta, t.TempDir(), model.CurrentEncoding, 0)
+	require.NoError(t, err)
+	id := test.ValidTraceID(nil)
+	tr := test.MakeTrace(1, id)
+	tr.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes = append(tr.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes,
+		&v1_common.KeyValue{Key: "bi.secret", Value: &v1_common.AnyValue{Value: &v1_common.AnyValue_ArrayValue{
+			ArrayValue: &v1_common.ArrayValue{Values: []*v1_common.AnyValue{
+				{Value: &v1_common.AnyValue_StringValue{StringValue: a}},
+				{Value: &v1_common.AnyValue_StringValue{StringValue: a}},
+				{Value: &v1_common.AnyValue_StringValue{StringValue: b}},
+			}},
+		}}})
+	require.NoError(t, w.AppendTrace(id, tr, 0, 0, false))
+	require.NoError(t, w.Flush())
+	query := fmt.Sprintf(`{span.bi.secret @> [%q, %q, %q]}`, a, a, b)
+	resp, err := w.Fetch(t.Context(), traceql.MustExtractFetchSpansRequestWithMetadata(query), common.DefaultSearchOptions())
+	require.NoError(t, err)
+	defer resp.Results.Close()
+	spanset, err := resp.Results.Next(t.Context())
+	require.NoError(t, err)
+	require.NotNil(t, spanset)
+	require.Len(t, spanset.Spans, 1)
+	value, ok := spanset.Spans[0].AttributeFor(traceql.NewScopedAttribute(traceql.AttributeScopeSpan, false, "bi.secret"))
+	require.True(t, ok)
+	arr, ok := value.StringArray()
+	require.True(t, ok)
+	require.Equal(t, []string{a, a, b}, arr)
 }

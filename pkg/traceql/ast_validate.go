@@ -1,8 +1,10 @@
 package traceql
 
 import (
+	"encoding/base64"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // unsupportedError is returned for traceql features that are not yet supported.
@@ -204,6 +206,32 @@ func (o *BinaryOperation) validate() error {
 		return err
 	}
 
+	if o.Op == OpContainsSequence {
+		attr, ok := o.LHS.(Attribute)
+		if !ok || attr.Scope != AttributeScopeSpan || attr.Parent || attr.Intrinsic != IntrinsicNone ||
+			!strings.HasPrefix(attr.Name, "bi.") || len(attr.Name) == len("bi.") {
+			return fmt.Errorf("@> requires a direct span.bi.* attribute")
+		}
+		rhs, ok := o.RHS.(Static)
+		if !ok || rhs.Type != TypeStringArray {
+			return fmt.Errorf("@> requires a string-array literal")
+		}
+		tokens, _ := rhs.StringArray()
+		if len(tokens) == 0 || len(tokens) > 510 {
+			return fmt.Errorf("@> requires between 1 and 510 tokens")
+		}
+		if !validSubstringToken(tokens[0]) {
+			return fmt.Errorf("@> requires canonical bi:v1 tokens with one key ID")
+		}
+		kid := tokens[0][len("bi:v1:") : len("bi:v1:")+32]
+		for _, token := range tokens {
+			if !validSubstringToken(token) || token[len("bi:v1:"):len("bi:v1:")+32] != kid {
+				return fmt.Errorf("@> requires canonical bi:v1 tokens with one key ID")
+			}
+		}
+		return nil
+	}
+
 	lhsT := o.LHS.impliedType()
 	rhsT := o.RHS.impliedType()
 
@@ -268,6 +296,27 @@ func (o *BinaryOperation) validate() error {
 	}
 
 	return nil
+}
+
+// validSubstringToken checks both the envelope and canonical base64url padding bits.
+func validSubstringToken(token string) bool {
+	const prefix = "bi:v1:"
+	const kidLength = 32
+	const digestLength = 43
+	if len(token) != len(prefix)+kidLength+1+digestLength || !strings.HasPrefix(token, prefix) ||
+		token[len(prefix)+kidLength] != ':' {
+		return false
+	}
+	for i := len(prefix); i < len(prefix)+kidLength; i++ {
+		c := token[i]
+		if !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+			return false
+		}
+	}
+	digest := token[len(prefix)+kidLength+1:]
+	var decoded [32]byte
+	n, err := base64.RawURLEncoding.Decode(decoded[:], []byte(digest))
+	return err == nil && n == len(decoded) && base64.RawURLEncoding.EncodeToString(decoded[:]) == digest
 }
 
 func (o UnaryOperation) validate() error {

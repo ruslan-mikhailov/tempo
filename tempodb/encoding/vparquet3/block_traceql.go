@@ -8,13 +8,16 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
 
+	"github.com/golang/protobuf/jsonpb" //nolint:all //deprecated; v3 stores arrays in jsonpb format
 	"github.com/parquet-go/parquet-go"
 
 	"github.com/grafana/tempo/v3/pkg/parquetquery"
+	v1_common "github.com/grafana/tempo/v3/pkg/tempopb/common/v1"
 	v1 "github.com/grafana/tempo/v3/pkg/tempopb/trace/v1"
 	"github.com/grafana/tempo/v3/pkg/traceql"
 	"github.com/grafana/tempo/v3/pkg/util"
@@ -796,6 +799,7 @@ const (
 	columnPathSpanStatusCode     = "rs.list.element.ss.list.element.Spans.list.element.StatusCode"
 	columnPathSpanStatusMessage  = "rs.list.element.ss.list.element.Spans.list.element.StatusMessage"
 	columnPathSpanAttrKey        = "rs.list.element.ss.list.element.Spans.list.element.Attrs.list.element.Key"
+	columnPathSpanAttrArray      = "rs.list.element.ss.list.element.Spans.list.element.Attrs.list.element.ValueArray"
 	columnPathSpanAttrString     = "rs.list.element.ss.list.element.Spans.list.element.Attrs.list.element.Value"
 	columnPathSpanAttrInt        = "rs.list.element.ss.list.element.Spans.list.element.Attrs.list.element.ValueInt"
 	columnPathSpanAttrDouble     = "rs.list.element.ss.list.element.Spans.list.element.Attrs.list.element.ValueDouble"
@@ -928,6 +932,12 @@ func checkConditions(conditions []traceql.Condition) error {
 			traceql.OpRegexMatchAny, traceql.OpRegexMatchNone:
 			if opCount != 1 {
 				return fmt.Errorf("operation %v must have exactly 1 argument. condition: %+v", cond.Op, cond)
+			}
+
+		case traceql.OpContainsSequence:
+			if opCount != 1 || cond.Operands[0].Type != traceql.TypeStringArray ||
+				cond.Attribute.Scope != traceql.AttributeScopeSpan {
+				return fmt.Errorf("@> requires one span string-array operand")
 			}
 
 		case traceql.OpNotExists:
@@ -1536,6 +1546,13 @@ func createSpanIterator(makeIter, makeNilIter makeIterFn, primaryIter parquetque
 	}
 
 	for _, cond := range conditions {
+		if cond.Op == traceql.OpContainsSequence ||
+			(cond.Op == traceql.OpNone && strings.HasPrefix(cond.Attribute.Name, "bi.")) {
+			// v3 dedicated columns hold only scalar values. Arrays live in the
+			// generic ValueArray JSON column, including dedicated field names.
+			iters = append(iters, createSequenceArrayIterator(makeIter, cond.Attribute.Name))
+			continue
+		}
 		// Intrinsic?
 		switch cond.Attribute.Intrinsic {
 		case traceql.IntrinsicSpanID:
@@ -2417,6 +2434,78 @@ func createBoolPredicate(op traceql.Operator, operands traceql.Operands) (parque
 	default:
 		return nil, fmt.Errorf("oparand is not bool or bool array: %+v", operands[0].EncodeToString(false))
 	}
+}
+
+// v3 did not index array elements. Decode the complete JSON value from the
+// same keyed attribute instead of silently interpreting it as a missing field.
+type sequenceArrayCollector struct {
+	name string
+	err  error
+}
+
+func (c *sequenceArrayCollector) String() string { return "sequenceArrayCollector" }
+
+func (c *sequenceArrayCollector) KeepGroup(res *parquetquery.IteratorResult) bool {
+	for _, e := range res.Entries {
+		if e.Key != "array" || e.Value.IsNull() {
+			continue
+		}
+		var value v1_common.AnyValue
+		if err := jsonpb.Unmarshal(strings.NewReader(unsafeToString(e.Value.Bytes())), &value); err != nil {
+			c.err = errors.New("invalid vparquet3 substring sidecar array JSON")
+			return false
+		}
+		array := value.GetArrayValue()
+		if array == nil || len(array.Values) == 0 {
+			c.err = errors.New("invalid vparquet3 substring sidecar array type")
+			return false
+		}
+		values := make([]string, 0, len(array.Values))
+		for _, item := range array.Values {
+			if _, ok := item.Value.(*v1_common.AnyValue_StringValue); !ok {
+				c.err = errors.New("invalid vparquet3 substring sidecar element type")
+				return false
+			}
+			values = append(values, item.GetStringValue())
+		}
+		res.Entries = res.Entries[:0]
+		res.OtherEntries = res.OtherEntries[:0]
+		res.AppendOtherValue(c.name, traceql.NewStaticStringArray(values))
+		return true
+	}
+	return false
+}
+
+func createSequenceArrayIterator(makeIter makeIterFn, name string) parquetquery.Iterator {
+	collector := &sequenceArrayCollector{name: name}
+	joined := parquetquery.NewJoinIterator(DefinitionLevelResourceSpansILSSpanAttrs,
+		[]parquetquery.Iterator{
+			makeIter(columnPathSpanAttrKey, parquetquery.NewStringEqualPredicate(name), "key"),
+			makeIter(columnPathSpanAttrArray, &parquetquery.SkipNilsPredicate{}, "array"),
+		},
+		collector, parquetquery.WithPool(pqAttrPool))
+	return &sequenceArrayIterator{Iterator: joined, collector: collector}
+}
+
+type sequenceArrayIterator struct {
+	parquetquery.Iterator
+	collector *sequenceArrayCollector
+}
+
+func (i *sequenceArrayIterator) Next() (*parquetquery.IteratorResult, error) {
+	result, err := i.Iterator.Next()
+	if i.collector.err != nil {
+		return nil, i.collector.err
+	}
+	return result, err
+}
+
+func (i *sequenceArrayIterator) SeekTo(row parquetquery.RowNumber, level int) (*parquetquery.IteratorResult, error) {
+	result, err := i.Iterator.SeekTo(row, level)
+	if i.collector.err != nil {
+		return nil, i.collector.err
+	}
+	return result, err
 }
 
 func createAttributeIterator(makeIter makeIterFn, conditions []traceql.Condition,

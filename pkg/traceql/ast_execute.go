@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/grafana/tempo/v3/pkg/regexp"
@@ -405,6 +406,19 @@ func (o *BinaryOperation) execute(span Span) (Static, error) {
 
 	if recording {
 		o.b.Finish(rightBranch)
+	}
+	if o.Op == OpContainsSequence {
+		haystack, lhsOK := lhs.StringArray()
+		needle, rhsOK := rhs.StringArray()
+		if !lhsOK || !rhsOK || len(needle) == 0 {
+			return StaticFalse, nil
+		}
+		for start := 0; start+len(needle) <= len(haystack); start++ {
+			if slices.Equal(haystack[start:start+len(needle)], needle) {
+				return StaticTrue, nil
+			}
+		}
+		return StaticFalse, nil
 	}
 
 	lhsT := lhs.Type

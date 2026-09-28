@@ -1,0 +1,16 @@
+# Build the Tempo fork so the distributed demo exercises the local TraceQL operator.
+FROM --platform=$BUILDPLATFORM golang:1.27.1-bookworm AS build
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src/tempo
+COPY . .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -mod=vendor -trimpath -o /out/tempo ./cmd/tempo
+
+FROM alpine:3.23
+RUN apk add --no-cache ca-certificates && addgroup -g 10001 -S tempo && \
+    adduser -u 10001 -S tempo -G tempo && mkdir -p /var/tempo && \
+    chown tempo:tempo /var/tempo
+COPY --from=build /out/tempo /tempo
+USER 10001:10001
+ENTRYPOINT ["/tempo"]

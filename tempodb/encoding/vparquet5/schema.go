@@ -552,8 +552,12 @@ func writeAttrs(input []*v1.KeyValue, generic *[]Attribute, dedicated *Dedicated
 	for _, a := range input {
 		written := false
 
-		if spareColumn, exists := mapping.get(a.Key); exists {
-			written = spareColumn.writeValue(dedicated, a.Value)
+		// The repeated dedicated column cannot distinguish a scalar from
+		// a one-item array. Sidecars must retain the generic IsArray bit.
+		if !strings.HasPrefix(a.Key, "bi.") {
+			if spareColumn, exists := mapping.get(a.Key); exists {
+				written = spareColumn.writeValue(dedicated, a.Value)
+			}
 		}
 
 		if !written {

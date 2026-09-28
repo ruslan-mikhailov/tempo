@@ -49,6 +49,12 @@ func (o SelectOperation) extractConditions(request *FetchSpansRequest) {
 }
 
 func (o *BinaryOperation) extractConditions(request *FetchSpansRequest) {
+	// A positive substring match is a necessary condition only when combined
+	// directly with AND/OR. Other operators can invert its truth value.
+	if o.Op != OpContainsSequence && o.Op != OpAnd && o.Op != OpOr {
+		start := len(request.Conditions)
+		defer degradeSubstringConditions(request, start, false)
+	}
 	// TODO we can further optimise this by attempting to execute every FieldExpression, if they only contain statics it should resolve
 	switch l := o.LHS.(type) {
 	case Attribute:
@@ -131,7 +137,13 @@ func (o *BinaryOperation) extractConditions(request *FetchSpansRequest) {
 }
 
 func (o UnaryOperation) extractConditions(request *FetchSpansRequest) {
-	// TODO when Op is Not we should just either negate all inner Operands or just fetch the columns with OpNone
+	if o.Op == OpNot {
+		start := len(request.Conditions)
+		o.Expression.extractConditions(request)
+		// Negation can reverse any predicate, so fetch the attribute unfiltered.
+		degradeSubstringConditions(request, start, true)
+		return
+	}
 
 	switch expr := o.Expression.(type) {
 	case Attribute:
@@ -148,6 +160,25 @@ func (o UnaryOperation) extractConditions(request *FetchSpansRequest) {
 		}
 	default:
 		expr.extractConditions(request)
+	}
+}
+
+// An inverted substring predicate must not restrict candidates, including
+// spans without a sidecar. Fetch all spans and still load the sidecar when present.
+func degradeSubstringConditions(request *FetchSpansRequest, start int, all bool) {
+	found := false
+	for i := start; i < len(request.Conditions); i++ {
+		if request.Conditions[i].Op == OpContainsSequence {
+			found = true
+		}
+		if all || request.Conditions[i].Op == OpContainsSequence {
+			request.Conditions[i].Op = OpNone
+			request.Conditions[i].Operands = nil
+		}
+	}
+	if found {
+		request.AllConditions = false
+		request.appendCondition(Condition{Attribute: NewIntrinsic(IntrinsicSpanStartTime), Op: OpNone})
 	}
 }
 

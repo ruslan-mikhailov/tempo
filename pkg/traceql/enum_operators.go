@@ -41,13 +41,16 @@ const (
 	OpSpansetUnionAncestor
 	OpSpansetUnionDescendant
 
-	// The following operators are used internally and only exist in the AST. They are not parseable in TraceQL
+	// The following six operators are used internally and only exist in the AST. They are not parseable in TraceQL.
 	OpExists
 	OpNotExists
 	OpIn
 	OpNotIn
 	OpRegexMatchAny
 	OpRegexMatchNone
+
+	// OpContainsSequence matches an ordered contiguous token slice within one string array.
+	OpContainsSequence
 )
 
 func (op Operator) isArithmetic() bool {
@@ -63,6 +66,7 @@ func (op Operator) isBoolean() bool {
 		op == OpNotRegex ||
 		op == OpGreater ||
 		op == OpGreaterEqual ||
+		op == OpContainsSequence ||
 		op == OpLess ||
 		op == OpLessEqual ||
 		op == OpNot ||
@@ -109,6 +113,7 @@ func binaryTypeValid(op Operator, t StaticType) bool {
 	case TypeString, TypeStringArray:
 		return op == OpEqual ||
 			op == OpNotEqual ||
+			op == OpContainsSequence ||
 			op == OpRegex ||
 			op == OpNotRegex ||
 			op == OpGreater ||
@@ -183,6 +188,8 @@ func (op Operator) String() string {
 		return "="
 	case OpNotEqual:
 		return "!="
+	case OpContainsSequence:
+		return "@>"
 	case OpRegex:
 		return "=~"
 	case OpNotRegex:

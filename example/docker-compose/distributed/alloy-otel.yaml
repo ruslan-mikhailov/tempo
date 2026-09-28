@@ -12,9 +12,11 @@ processors:
       - span_attributes: [secret, api.token]
         key_file: /etc/alloy/secret-key
         value_scheme: aes256siv-hkdf-v1
+        substring_index: ordered-trigram-v1
       - span_attributes: [customer.email]
         key_file: /etc/alloy/customer-key
         value_scheme: aes256siv-hkdf-v1
+        substring_index: ordered-trigram-v1
   batch: {}
 
 exporters:

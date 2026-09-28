@@ -26,6 +26,9 @@ datasources:
   uid: tempo-streaming-enabled
   jsonData:
     protectedAttributesEnabled: true
+    protectedAttributesSubstringEnabled: true
+    redactionSchedulerURL: http://backend-scheduler:9095
+    httpHeaderName1: X-Scope-OrgID
     httpMethod: GET
     serviceMap:
       datasourceUid: prometheus
@@ -45,6 +48,9 @@ datasources:
   uid: tempo-streaming-disabled
   jsonData:
     protectedAttributesEnabled: true
+    protectedAttributesSubstringEnabled: true
+    redactionSchedulerURL: http://backend-scheduler:9095
+    httpHeaderName1: X-Scope-OrgID
     httpMethod: GET
     serviceMap:
       datasourceUid: prometheus

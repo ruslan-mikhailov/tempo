@@ -108,8 +108,7 @@ type dedicatedColumn struct {
 	Type        backend.DedicatedColumnType
 	ColumnPath  string
 	ColumnIndex int
-	// IsArray     bool
-	IsBlob bool
+	IsBlob      bool
 }
 
 func (dc *dedicatedColumn) readValue(attrs *DedicatedAttributes) *v1.AnyValue {
@@ -328,8 +327,6 @@ func dedicatedColumnsToColumnMapping(dedicatedColumns backend.DedicatedColumns, 
 
 			for _, opt := range c.Options {
 				switch opt {
-				case backend.DedicatedColumnOptionArray:
-					// dc.IsArray = true
 				case backend.DedicatedColumnOptionBlob:
 					dc.IsBlob = true
 				}

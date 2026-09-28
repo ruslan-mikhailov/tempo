@@ -1190,6 +1190,12 @@ func checkConditions(conditions []traceql.Condition) error {
 				return fmt.Errorf("operation %v must have exactly 1 argument. condition: %+v", cond.Op, cond)
 			}
 
+		case traceql.OpContainsSequence:
+			if opCount != 1 || cond.Operands[0].Type != traceql.TypeStringArray ||
+				cond.Attribute.Scope != traceql.AttributeScopeSpan {
+				return fmt.Errorf("@> requires one span string-array operand")
+			}
+
 		case traceql.OpNotExists:
 			if opCount != 0 {
 				return fmt.Errorf("operation %v must have 0 arguments. condition: %+v", cond.Op, cond)
@@ -2088,6 +2094,18 @@ func createSpanIterator(makeIter, makeNilIter makeIterFn, innerIterators []parqu
 	}
 
 	for _, cond := range conditions {
+		if cond.Op == traceql.OpContainsSequence ||
+			(cond.Op == traceql.OpNone && len(cond.Attribute.Name) >= 3 && cond.Attribute.Name[:3] == "bi.") {
+			if c, ok := columnMapping.get(cond.Attribute.Name); ok {
+				// Old v5 dedicated values cannot distinguish singleton arrays
+				// from scalars. New writers store bi.* in generic attributes.
+				if err := checkLegacySequenceColumn(makeIter, c.ColumnPath); err != nil {
+					return nil, err
+				}
+			}
+			iters = append(iters, createSequenceAttributeIterator(makeIter, cond.Attribute.Name))
+			continue
+		}
 		// Intrinsic?
 		switch cond.Attribute.Intrinsic {
 		case traceql.IntrinsicSpanID:
@@ -3109,6 +3127,61 @@ func createBoolPredicate(op traceql.Operator, operands traceql.Operands) (parque
 	default:
 		return nil, fmt.Errorf("oparand is not bool or bool array: %+v", operands[0].EncodeToString(false))
 	}
+}
+
+// A sequence condition is never a per-element predicate: return every element
+// from the same attribute in storage order and preserve single-item array type.
+func createSequenceAttributeIterator(makeIter makeIterFn, name string) parquetquery.Iterator {
+	return parquetquery.NewJoinIterator(DefinitionLevelResourceSpansILSSpanAttrs,
+		[]parquetquery.Iterator{
+			makeIter(columnPathSpanAttrKey, parquetquery.NewStringEqualPredicate(name), "key"),
+			makeIter(FieldSpanAttrIsArray, parquetquery.NewBoolEqualPredicate(true), "isArray"),
+			makeIter(columnPathSpanAttrString, nil, "string"),
+		},
+		&sequenceAttributeCollector{name: name},
+		parquetquery.WithPool(pqAttrPool))
+}
+
+// Reject old dedicated sidecars rather than returning a false scalar match or
+// silently missing an array written before bi.* moved to generic storage.
+func checkLegacySequenceColumn(makeIter makeIterFn, path string) error {
+	iter := makeIter(path, &parquetquery.SkipNilsPredicate{}, "")
+	defer iter.Close()
+	for {
+		result, err := iter.Next()
+		if err != nil {
+			return fmt.Errorf("reading legacy dedicated substring sidecar: %w", err)
+		}
+		if result == nil {
+			return nil
+		}
+		// SkipNilsPredicate returns rows only for stored values; the
+		// row-only iterator intentionally does not materialize their bytes.
+		return fmt.Errorf("vparquet5 legacy dedicated substring sidecar has unknown scalar/array type: unsupported block")
+	}
+}
+
+type sequenceAttributeCollector struct {
+	name   string
+	values []string
+}
+
+func (c *sequenceAttributeCollector) String() string { return "sequenceAttributeCollector" }
+
+func (c *sequenceAttributeCollector) KeepGroup(res *parquetquery.IteratorResult) bool {
+	c.values = c.values[:0]
+	for _, e := range res.Entries {
+		if e.Key == "string" && !e.Value.IsNull() {
+			c.values = append(c.values, unsafeToString(e.Value.Bytes()))
+		}
+	}
+	if len(c.values) == 0 {
+		return false
+	}
+	res.Entries = res.Entries[:0]
+	res.OtherEntries = res.OtherEntries[:0]
+	res.AppendOtherValue(c.name, traceql.NewStaticStringArray(util.Clone(c.values)))
+	return true
 }
 
 func createAttributeIterator(makeIter makeIterFn, conditions []traceql.Condition,

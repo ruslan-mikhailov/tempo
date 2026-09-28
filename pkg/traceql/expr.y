@@ -48,6 +48,7 @@ import (
     staticFloat float64
     staticDuration time.Duration
     numericList []float64
+    stringList []string
 
     hint *Hint
     hintList []*Hint
@@ -89,6 +90,7 @@ import (
 %type <attribute> attribute
 
 %type <numericList> numericList
+%type <stringList> stringList
 %type <static> scalar
 
 %type <hint> hint
@@ -99,7 +101,7 @@ import (
 %token <staticInt>      INTEGER
 %token <staticFloat>    FLOAT
 %token <staticDuration> DURATION
-%token <val>            DOT OPEN_BRACE CLOSE_BRACE OPEN_PARENS CLOSE_PARENS COMMA
+%token <val>            DOT OPEN_BRACE CLOSE_BRACE OPEN_PARENS CLOSE_PARENS OPEN_BRACKET CLOSE_BRACKET COMMA
                         NIL TRUE FALSE STATUS_ERROR STATUS_OK STATUS_UNSET
                         KIND_UNSPECIFIED KIND_INTERNAL KIND_SERVER KIND_CLIENT KIND_PRODUCER KIND_CONSUMER
                         IDURATION CHILDCOUNT NAME STATUS STATUS_MESSAGE PARENT KIND ROOTNAME ROOTSERVICENAME 
@@ -117,7 +119,7 @@ import (
 // Operators are listed with increasing precedence.
 %left <binOp> PIPE
 %left <binOp> AND OR
-%left <binOp> EQ NEQ LT LTE GT GTE NRE RE DESC ANCE SIBL NOT_CHILD NOT_PARENT NOT_DESC NOT_ANCE UNION_CHILD UNION_PARENT UNION_DESC UNION_ANCE UNION_SIBL
+%left <binOp> EQ NEQ LT LTE GT GTE NRE RE CONTAINS_SEQUENCE DESC ANCE SIBL NOT_CHILD NOT_PARENT NOT_DESC NOT_ANCE UNION_CHILD UNION_PARENT UNION_DESC UNION_ANCE UNION_SIBL
 %nonassoc INTEGER FLOAT
 %left <binOp> ADD SUB
 %left <binOp> NOT
@@ -202,6 +204,12 @@ attribute:
 attributeList:
     attribute                     { $$ = []Attribute{$1} }
   | attributeList COMMA attribute { $$ = append($1, $3) }
+  ;
+
+// String arrays are only literal operands of the protected substring operator.
+stringList:
+    STRING                   { $$ = []string{$1} }
+  | stringList COMMA STRING  { $$ = append($1, $3) }
   ;
 
 // Comma-separated list of numeric values. Casts all to floats
@@ -472,6 +480,8 @@ fieldExpression:
   | fieldExpression POW fieldExpression      { $$ = newBinaryOperation(OpPower, $1, $3) }
   | fieldExpression AND fieldExpression      { $$ = newBinaryOperation(OpAnd, $1, $3) }
   | fieldExpression OR fieldExpression       { $$ = newBinaryOperation(OpOr, $1, $3) }
+  | attributeField CONTAINS_SEQUENCE OPEN_BRACKET stringList CLOSE_BRACKET %prec CONTAINS_SEQUENCE
+                                              { $$ = newBinaryOperation(OpContainsSequence, $1, NewStaticStringArray($4)) }
   // NIL handling
   | fieldExpression NEQ NIL                  { $$ = newUnaryOperation(OpExists, $1) }
   | NIL NEQ fieldExpression                  { $$ = newUnaryOperation(OpExists, $3) }

@@ -3021,3 +3021,116 @@ func blockForBenchmarks(b testing.TB) *backendBlock {
 
 	return newBackendBlock(meta, rr)
 }
+
+func TestProtectedSubstringStorage(t *testing.T) {
+	const prefix = "bi:v1:630dcd2966c4336691125448bbb25b4f:"
+	a, b, c := prefix+strings.Repeat("A", 43), prefix+strings.Repeat("B", 42)+"A", prefix+strings.Repeat("C", 42)+"A"
+	field := traceql.NewScopedAttribute(traceql.AttributeScopeSpan, false, "bi.secret")
+
+	for _, dedicated := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dedicated=%v", dedicated), func(t *testing.T) {
+			var dc backend.DedicatedColumns
+			if dedicated {
+				dc = backend.DedicatedColumns{{Scope: backend.DedicatedColumnScopeSpan, Name: "bi.secret", Type: backend.DedicatedColumnTypeString, Options: backend.DedicatedColumnOptions{backend.DedicatedColumnOptionArray}}}
+			}
+			makeTrace := func(values []string, scalar bool) *Trace {
+				s := Span{SpanID: []byte("span-id1"), Name: "substring-test", StartTimeUnixNano: uint64(time.Second), DurationNano: uint64(time.Second)}
+				if values != nil {
+					s.Attrs = []Attribute{{Key: "bi.secret", Value: values, IsArray: !scalar}}
+				}
+				return &Trace{TraceID: test.ValidTraceID(nil), ResourceSpans: []ResourceSpans{{
+					Resource: Resource{ServiceName: "substring-test"},
+					ScopeSpans: []ScopeSpans{{SpanCount: 1, Spans: []Span{s}}},
+				}}}
+			}
+			block := makeBackendBlockWithTracesWithDedicatedColumns(t, []*Trace{
+				makeTrace([]string{a, a, b, c}, false),
+				makeTrace([]string{a, b, a}, false),
+				makeTrace([]string{b, a, a}, false),
+				makeTrace([]string{a}, false),
+				makeTrace([]string{a}, true),
+				makeTrace(nil, false),
+			}, dc)
+			ctx := t.Context()
+			opts := common.DefaultSearchOptions()
+			fetcher := traceql.NewSpansetFetcherWrapperBoth(
+				func(ctx context.Context, req traceql.FetchSpansRequest) (traceql.FetchSpansResponse, error) {
+					return block.Fetch(ctx, req, opts)
+				},
+				func(ctx context.Context, req traceql.FetchSpansRequest) (traceql.FetchSpansOnlyResponse, error) {
+					return block.FetchSpans(ctx, req, opts)
+				},
+			)
+			check := func(query string, want int) {
+				t.Helper()
+				result, err := traceql.NewEngine().ExecuteSearch(ctx, &tempopb.SearchRequest{Query: query}, fetcher)
+				require.NoError(t, err)
+				n := 0
+				for _, tr := range result.Traces {
+					for _, ss := range tr.SpanSets {
+						n += len(ss.Spans)
+					}
+				}
+				require.Equal(t, want, n, query)
+			}
+			query := func(tokens ...string) string {
+				quoted := make([]string, len(tokens))
+				for i, token := range tokens {
+					quoted[i] = fmt.Sprintf("%q", token)
+				}
+				return `{span.bi.secret @> [` + strings.Join(quoted, ",") + `]}`
+			}
+			check(query(a, a, b), 1) // duplicates and adjacency
+			check(query(b, a), 2)
+			check(query(a, b, b), 0)
+			check(query(a), 4)
+			check(query(c, b), 0)
+			check(`{(span.bi.secret @> ["`+c+`", "`+b+`"]) || (span.bi.secret @> ["`+a+`", "`+a+`", "`+b+`"])}`, 1)
+			check(`{!(span.bi.secret @> ["`+a+`", "`+a+`", "`+b+`"])}`, 5) // missing sidecar also satisfies NOT
+
+			req := traceql.MustExtractFetchSpansRequestWithMetadata(query(a))
+			resp, err := block.FetchSpans(ctx, req, opts)
+			require.NoError(t, err)
+			seen := 0
+			for {
+				sp, err := resp.Results.Next(ctx)
+				require.NoError(t, err)
+				if sp == nil {
+					break
+				}
+				value, ok := sp.AttributeFor(field)
+				require.True(t, ok)
+				arr, ok := value.StringArray()
+				require.True(t, ok)
+				if len(arr) == 1 {
+					require.Equal(t, []string{a}, arr)
+				}
+				seen++
+			}
+			resp.Results.Close()
+			require.Equal(t, 4, seen)
+			start := uint64(1)
+			end := uint64(3 * time.Second)
+			rq := &tempopb.QueryRangeRequest{Query: query(a, a, b) + ` | count_over_time()`, Start: start, End: end, Step: uint64(time.Second), MaxSeries: 100}
+			eval, err := traceql.NewEngine().CompileMetricsQueryRange(rq)
+			require.NoError(t, err)
+			require.NoError(t, eval.Do(ctx, fetcher, start, end, 100))
+			total := float64(0)
+			for _, series := range eval.Results() {
+				for _, v := range series.Values {
+					total += v
+				}
+			}
+			require.Equal(t, float64(1), total)
+			if dedicated {
+				legacy := makeTrace(nil, false)
+				legacy.ResourceSpans[0].ScopeSpans[0].Spans[0].DedicatedAttributes.String01 = []string{a}
+				oldBlock := makeBackendBlockWithTracesWithDedicatedColumns(t, []*Trace{legacy}, dc)
+				_, err = oldBlock.Fetch(ctx, req, opts)
+				require.ErrorContains(t, err, "legacy dedicated substring sidecar")
+				_, err = oldBlock.FetchSpans(ctx, req, opts)
+				require.ErrorContains(t, err, "legacy dedicated substring sidecar")
+			}
+		})
+	}
+}

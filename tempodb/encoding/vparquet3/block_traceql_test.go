@@ -2038,3 +2038,76 @@ func randomTree(count int) []traceql.Span {
 func ptr[T any](v T) *T {
 	return &v
 }
+
+func TestProtectedSubstringLegacyJSONArrays(t *testing.T) {
+	const prefix = "bi:v1:630dcd2966c4336691125448bbb25b4f:"
+	a, b, c := prefix+strings.Repeat("A", 43), prefix+strings.Repeat("B", 42)+"A", prefix+strings.Repeat("C", 42)+"A"
+	makeTrace := func(values []string, scalar bool) *Trace {
+		s := Span{SpanID: []byte("span-id1"), Name: "substring-test", StartTimeUnixNano: uint64(time.Second), DurationNano: uint64(time.Second)}
+		if values != nil {
+			if scalar {
+				s.Attrs = []Attribute{attr("bi.secret", values[0])}
+			} else {
+				items := make([]string, len(values))
+				for i, value := range values {
+					items[i] = fmt.Sprintf(`{"stringValue":%q}`, value)
+				}
+				s.Attrs = []Attribute{{Key: "bi.secret", ValueArray: `{"arrayValue":{"values":[` + strings.Join(items, ",") + `]}}`}}
+			}
+		}
+		return &Trace{TraceID: test.ValidTraceID(nil), ResourceSpans: []ResourceSpans{{
+			Resource: Resource{ServiceName: "substring-test"},
+			ScopeSpans: []ScopeSpans{{Spans: []Span{s}}},
+		}}}
+	}
+	block := makeBackendBlockWithTraces(t, []*Trace{
+		makeTrace([]string{a, a, b, c}, false),
+		makeTrace([]string{a, b, a}, false),
+		makeTrace([]string{b, a, a}, false),
+		makeTrace([]string{a}, false),
+		makeTrace([]string{a}, true),
+		makeTrace(nil, false),
+	})
+	ctx := t.Context()
+	opts := common.DefaultSearchOptions()
+	fetcher := traceql.NewSpansetFetcherWrapper(func(ctx context.Context, req traceql.FetchSpansRequest) (traceql.FetchSpansResponse, error) {
+		return block.Fetch(ctx, req, opts)
+	})
+	query := func(tokens ...string) string {
+		quoted := make([]string, len(tokens))
+		for i, token := range tokens {
+			quoted[i] = fmt.Sprintf("%q", token)
+		}
+		return `{span.bi.secret @> [` + strings.Join(quoted, ", ") + `]}`
+	}
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{query(a, a, b), 1},
+		{query(b, a), 2},
+		{query(a, b, b), 0},
+		{query(a), 4},
+		{query(c, b), 0},
+		{`{(span.bi.secret @> ["` + c + `", "` + b + `"]) || (span.bi.secret @> ["` + a + `", "` + a + `", "` + b + `"])}`, 1},
+		{`{!(span.bi.secret @> ["` + a + `", "` + a + `", "` + b + `"])}`, 5},
+	} {
+		result, err := traceql.NewEngine().ExecuteSearch(ctx, &tempopb.SearchRequest{Query: tc.query}, fetcher)
+		require.NoError(t, err, tc.query)
+		n := 0
+		for _, tr := range result.Traces {
+			for _, ss := range tr.SpanSets {
+				n += len(ss.Spans)
+			}
+		}
+		require.Equal(t, tc.want, n, tc.query)
+	}
+	corrupt := makeTrace(nil, false)
+	corrupt.ResourceSpans[0].ScopeSpans[0].Spans[0].Attrs = []Attribute{{Key: "bi.secret", ValueArray: `{"arrayValue":{"values":[`}}
+	corruptBlock := makeBackendBlockWithTraces(t, []*Trace{corrupt})
+	resp, err := corruptBlock.Fetch(ctx, traceql.MustExtractFetchSpansRequestWithMetadata(query(a)), opts)
+	require.NoError(t, err)
+	defer resp.Results.Close()
+	_, err = resp.Results.Next(ctx)
+	require.ErrorContains(t, err, "invalid vparquet3 substring sidecar array JSON")
+}

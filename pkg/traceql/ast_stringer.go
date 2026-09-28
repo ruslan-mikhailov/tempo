@@ -68,6 +68,23 @@ func (f ScalarFilter) String() string {
 }
 
 func (o *BinaryOperation) String() string {
+	if o.Op == OpContainsSequence {
+		rhs, ok := o.RHS.(Static)
+		if ok && rhs.Type == TypeStringArray {
+			tokens, _ := rhs.StringArray()
+			var b strings.Builder
+			b.WriteString(o.LHS.String())
+			b.WriteString(" @> [")
+			for i, token := range tokens {
+				if i > 0 {
+					b.WriteString(", ")
+				}
+				b.WriteString(strconv.Quote(token))
+			}
+			b.WriteByte(']')
+			return b.String()
+		}
+	}
 	return binaryOp(o.Op, o.LHS, o.RHS)
 }
 

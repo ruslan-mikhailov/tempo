@@ -19,10 +19,13 @@ var tokenMap = map[string]int{
 	"{":                   OPEN_BRACE,
 	"}":                   CLOSE_BRACE,
 	"(":                   OPEN_PARENS,
+	"[":                   OPEN_BRACKET,
+	"]":                   CLOSE_BRACKET,
 	")":                   CLOSE_PARENS,
 	"=":                   EQ,
 	"!=":                  NEQ,
 	"=~":                  RE,
+	"@>":                  CONTAINS_SEQUENCE,
 	"!~":                  NRE, // also "not sibling"
 	">":                   GT,
 	">=":                  GTE,
