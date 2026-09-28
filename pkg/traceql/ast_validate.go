@@ -206,27 +206,39 @@ func (o *BinaryOperation) validate() error {
 		return err
 	}
 
-	if o.Op == OpContainsSequence {
+	if o.Op == OpContains || o.Op == OpNotContains {
+		attr, ok := o.LHS.(Attribute)
+		// enc.* values are stored strings too; literal contains inspects ciphertext, not plaintext.
+		if !ok || attr.Intrinsic != IntrinsicNone || strings.HasPrefix(attr.Name, "bi.") {
+			return fmt.Errorf("%s requires a string attribute outside bi.*", o.Op)
+		}
+		rhs, ok := o.RHS.(Static)
+		if !ok || rhs.Type != TypeString {
+			return fmt.Errorf("%s requires a string literal", o.Op)
+		}
+		return nil
+	}
+	if o.Op == OpContainsSequence || o.Op == OpNotContainsSequence {
 		attr, ok := o.LHS.(Attribute)
 		if !ok || attr.Scope != AttributeScopeSpan || attr.Parent || attr.Intrinsic != IntrinsicNone ||
 			!strings.HasPrefix(attr.Name, "bi.") || len(attr.Name) == len("bi.") {
-			return fmt.Errorf("@> requires a direct span.bi.* attribute")
+			return fmt.Errorf("%s requires a direct span.bi.* attribute", o.Op)
 		}
 		rhs, ok := o.RHS.(Static)
 		if !ok || rhs.Type != TypeStringArray {
-			return fmt.Errorf("@> requires a string-array literal")
+			return fmt.Errorf("%s requires a string-array literal", o.Op)
 		}
 		tokens, _ := rhs.StringArray()
 		if len(tokens) == 0 || len(tokens) > 510 {
-			return fmt.Errorf("@> requires between 1 and 510 tokens")
+			return fmt.Errorf("%s requires between 1 and 510 tokens", o.Op)
 		}
 		if !validSubstringToken(tokens[0]) {
-			return fmt.Errorf("@> requires canonical bi:v1 tokens with one key ID")
+			return fmt.Errorf("%s requires canonical bi:v1 tokens with one key ID", o.Op)
 		}
 		kid := tokens[0][len("bi:v1:") : len("bi:v1:")+32]
 		for _, token := range tokens {
 			if !validSubstringToken(token) || token[len("bi:v1:"):len("bi:v1:")+32] != kid {
-				return fmt.Errorf("@> requires canonical bi:v1 tokens with one key ID")
+				return fmt.Errorf("%s requires canonical bi:v1 tokens with one key ID", o.Op)
 			}
 		}
 		return nil

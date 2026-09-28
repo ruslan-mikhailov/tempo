@@ -583,7 +583,7 @@ func TestProtectedSubstringWALGenericArrayWithDedicatedConfig(t *testing.T) {
 	require.NoError(t, w.AppendTrace(id, tr, 0, 0, false))
 	require.NoError(t, w.Flush())
 
-	query := fmt.Sprintf(`{span.bi.secret @> [%q, %q, %q]}`, a, a, b)
+	query := fmt.Sprintf(`{span.bi.secret subarray_seq [%q, %q, %q]}`, a, a, b)
 	req := traceql.MustExtractFetchSpansRequestWithMetadata(query)
 	for _, metrics := range []bool{false, true} {
 		if metrics {

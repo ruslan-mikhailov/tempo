@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/grafana/tempo/v3/pkg/regexp"
+	"golang.org/x/text/unicode/norm"
 )
 
 var errSpansetOperationMultiple = errors.New("spanset operators are not supported for multiple spansets per trace. consider using coalesce()")
@@ -407,18 +408,33 @@ func (o *BinaryOperation) execute(span Span) (Static, error) {
 	if recording {
 		o.b.Finish(rightBranch)
 	}
-	if o.Op == OpContainsSequence {
+	if o.Op == OpContains || o.Op == OpNotContains {
+		if lhs.Type != TypeString || rhs.Type != TypeString {
+			return StaticFalse, nil
+		}
+		haystack := lhs.EncodeToString(false)
+		needle := rhs.EncodeToString(false)
+		contains := strings.Contains(norm.NFC.String(haystack), norm.NFC.String(needle))
+		return NewStaticBool(contains == (o.Op == OpContains)), nil
+	}
+	if o.Op == OpContainsSequence || o.Op == OpNotContainsSequence {
 		haystack, lhsOK := lhs.StringArray()
 		needle, rhsOK := rhs.StringArray()
-		if !lhsOK || !rhsOK || len(needle) == 0 {
+		if !lhsOK || !rhsOK || len(haystack) == 0 || len(needle) == 0 {
 			return StaticFalse, nil
+		}
+		kid := needle[0][len("bi:v1:") : len("bi:v1:")+32]
+		for _, token := range haystack {
+			if !validSubstringToken(token) || token[len("bi:v1:"):len("bi:v1:")+32] != kid {
+				return StaticFalse, nil
+			}
 		}
 		for start := 0; start+len(needle) <= len(haystack); start++ {
 			if slices.Equal(haystack[start:start+len(needle)], needle) {
-				return StaticTrue, nil
+				return NewStaticBool(o.Op == OpContainsSequence), nil
 			}
 		}
-		return StaticFalse, nil
+		return NewStaticBool(o.Op == OpNotContainsSequence), nil
 	}
 
 	lhsT := lhs.Type

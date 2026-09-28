@@ -3038,6 +3038,13 @@ func TestProtectedSubstringStorage(t *testing.T) {
 				if values != nil {
 					s.Attrs = []Attribute{{Key: "bi.secret", Value: values, IsArray: !scalar}}
 				}
+				if !scalar && len(values) > 2 {
+					plain := "other"
+					if len(values) == 4 {
+						plain = "Cafe\u0301"
+					}
+					s.Attrs = append(s.Attrs, Attribute{Key: "unencrypted", Value: []string{plain}})
+				}
 				return &Trace{TraceID: test.ValidTraceID(nil), ResourceSpans: []ResourceSpans{{
 					Resource: Resource{ServiceName: "substring-test"},
 					ScopeSpans: []ScopeSpans{{SpanCount: 1, Spans: []Span{s}}},
@@ -3048,6 +3055,7 @@ func TestProtectedSubstringStorage(t *testing.T) {
 				makeTrace([]string{a, b, a}, false),
 				makeTrace([]string{b, a, a}, false),
 				makeTrace([]string{a}, false),
+				makeTrace([]string{strings.Replace(a, "630d", "730d", 1), strings.Replace(b, "630d", "730d", 1)}, false),
 				makeTrace([]string{a}, true),
 				makeTrace(nil, false),
 			}, dc)
@@ -3078,15 +3086,19 @@ func TestProtectedSubstringStorage(t *testing.T) {
 				for i, token := range tokens {
 					quoted[i] = fmt.Sprintf("%q", token)
 				}
-				return `{span.bi.secret @> [` + strings.Join(quoted, ",") + `]}`
+				return `{span.bi.secret subarray_seq [` + strings.Join(quoted, ",") + `]}`
 			}
 			check(query(a, a, b), 1) // duplicates and adjacency
 			check(query(b, a), 2)
 			check(query(a, b, b), 0)
 			check(query(a), 4)
 			check(query(c, b), 0)
-			check(`{(span.bi.secret @> ["`+c+`", "`+b+`"]) || (span.bi.secret @> ["`+a+`", "`+a+`", "`+b+`"])}`, 1)
-			check(`{!(span.bi.secret @> ["`+a+`", "`+a+`", "`+b+`"])}`, 5) // missing sidecar also satisfies NOT
+			check(query(strings.Replace(a, "630d", "730d", 1)), 1)
+			check(`{(span.bi.secret subarray_seq ["`+c+`", "`+b+`"]) || (span.bi.secret subarray_seq ["`+a+`", "`+a+`", "`+b+`"])}`, 1)
+			check(`{span.bi.secret !subarray_seq ["`+a+`", "`+a+`", "`+b+`"]}`, 3)
+			check(`{span.unencrypted @> "fé"}`, 1)
+			check(`{span.unencrypted !@> "fé"}`, 2)
+			check(`{span.unencrypted !@> "other"}`, 1)
 
 			req := traceql.MustExtractFetchSpansRequestWithMetadata(query(a))
 			resp, err := block.FetchSpans(ctx, req, opts)
@@ -3108,7 +3120,7 @@ func TestProtectedSubstringStorage(t *testing.T) {
 				seen++
 			}
 			resp.Results.Close()
-			require.Equal(t, 4, seen)
+			require.Equal(t, 5, seen)
 			start := uint64(1)
 			end := uint64(3 * time.Second)
 			rq := &tempopb.QueryRangeRequest{Query: query(a, a, b) + ` | count_over_time()`, Start: start, End: end, Step: uint64(time.Second), MaxSeries: 100}

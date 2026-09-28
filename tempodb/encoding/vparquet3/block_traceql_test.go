@@ -2055,6 +2055,13 @@ func TestProtectedSubstringLegacyJSONArrays(t *testing.T) {
 				s.Attrs = []Attribute{{Key: "bi.secret", ValueArray: `{"arrayValue":{"values":[` + strings.Join(items, ",") + `]}}`}}
 			}
 		}
+		if !scalar && len(values) > 2 {
+			plain := "other"
+			if len(values) == 4 {
+				plain = "Cafe\u0301"
+			}
+			s.Attrs = append(s.Attrs, attr("unencrypted", plain))
+		}
 		return &Trace{TraceID: test.ValidTraceID(nil), ResourceSpans: []ResourceSpans{{
 			Resource: Resource{ServiceName: "substring-test"},
 			ScopeSpans: []ScopeSpans{{Spans: []Span{s}}},
@@ -2065,6 +2072,7 @@ func TestProtectedSubstringLegacyJSONArrays(t *testing.T) {
 		makeTrace([]string{a, b, a}, false),
 		makeTrace([]string{b, a, a}, false),
 		makeTrace([]string{a}, false),
+		makeTrace([]string{strings.Replace(a, "630d", "730d", 1), strings.Replace(b, "630d", "730d", 1)}, false),
 		makeTrace([]string{a}, true),
 		makeTrace(nil, false),
 	})
@@ -2078,7 +2086,7 @@ func TestProtectedSubstringLegacyJSONArrays(t *testing.T) {
 		for i, token := range tokens {
 			quoted[i] = fmt.Sprintf("%q", token)
 		}
-		return `{span.bi.secret @> [` + strings.Join(quoted, ", ") + `]}`
+		return `{span.bi.secret subarray_seq [` + strings.Join(quoted, ", ") + `]}`
 	}
 	for _, tc := range []struct {
 		query string
@@ -2089,8 +2097,12 @@ func TestProtectedSubstringLegacyJSONArrays(t *testing.T) {
 		{query(a, b, b), 0},
 		{query(a), 4},
 		{query(c, b), 0},
-		{`{(span.bi.secret @> ["` + c + `", "` + b + `"]) || (span.bi.secret @> ["` + a + `", "` + a + `", "` + b + `"])}`, 1},
-		{`{!(span.bi.secret @> ["` + a + `", "` + a + `", "` + b + `"])}`, 5},
+		{query(strings.Replace(a, "630d", "730d", 1)), 1},
+		{`{(span.bi.secret subarray_seq ["` + c + `", "` + b + `"]) || (span.bi.secret subarray_seq ["` + a + `", "` + a + `", "` + b + `"])}`, 1},
+		{`{span.bi.secret !subarray_seq ["` + a + `", "` + a + `", "` + b + `"]}`, 3},
+		{`{span.unencrypted @> "fé"}`, 1},
+		{`{span.unencrypted !@> "fé"}`, 2},
+		{`{span.unencrypted !@> "other"}`, 1},
 	} {
 		result, err := traceql.NewEngine().ExecuteSearch(ctx, &tempopb.SearchRequest{Query: tc.query}, fetcher)
 		require.NoError(t, err, tc.query)

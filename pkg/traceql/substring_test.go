@@ -18,7 +18,7 @@ func substringQuery(tokens ...string) string {
 	for i, token := range tokens {
 		quoted[i] = fmt.Sprintf("%q", token)
 	}
-	return `{span.bi.secret @> [` + strings.Join(quoted, ", ") + `]}`
+	return `{span.bi.secret subarray_seq [` + strings.Join(quoted, ", ") + `]}`
 }
 
 func TestSubstringParserValidation(t *testing.T) {
@@ -26,7 +26,7 @@ func TestSubstringParserValidation(t *testing.T) {
 	ast, err := Parse(query)
 	require.NoError(t, err)
 	require.NoError(t, ast.validate())
-	require.Contains(t, ast.String(), `span.bi.secret @> ["`+substringTokenCoo+`", "`+substringTokenOol+`"]`)
+	require.Contains(t, ast.String(), `span.bi.secret subarray_seq ["`+substringTokenCoo+`", "`+substringTokenOol+`"]`)
 
 	quotedField := strings.Replace(query, "span.bi.secret", `span."bi.secret"`, 1)
 	quotedAST, err := Parse(quotedField)
@@ -44,6 +44,13 @@ func TestSubstringParserValidation(t *testing.T) {
 	atLimit, err := Parse(substringQuery(maximumTokens...))
 	require.NoError(t, err)
 	require.NoError(t, atLimit.validate())
+	negative, err := Parse(`{span."bi.secret" !subarray_seq ["` + substringTokenCoo + `"]}`)
+	require.NoError(t, err)
+	require.NoError(t, negative.validate())
+	require.Contains(t, negative.String(), `span.bi.secret !subarray_seq ["`+substringTokenCoo+`"]`)
+	negativeRoundTrip, err := Parse(negative.String())
+	require.NoError(t, err)
+	require.NoError(t, negativeRoundTrip.validate())
 
 	for _, tc := range []struct {
 		name  string
@@ -55,14 +62,18 @@ func TestSubstringParserValidation(t *testing.T) {
 		{"ordinary field", strings.Replace(query, "span.bi.secret", "span.secret", 1)},
 		{"encrypted field", strings.Replace(query, "span.bi.secret", "span.enc.secret", 1)},
 		{"empty field", strings.Replace(query, "span.bi.secret", `span."bi."`, 1)},
-		{"empty tokens", `{span.bi.secret @> []}`},
-		{"scalar operand", `{span.bi.secret @> "cool"}`},
-		{"numeric operand", `{span.bi.secret @> [123]}`},
-		{"mixed operands", `{span.bi.secret @> ["` + substringTokenCoo + `", 123]}`},
+		{"empty tokens", `{span.bi.secret subarray_seq []}`},
+		{"scalar operand", `{span.bi.secret subarray_seq "cool"}`},
+		{"numeric operand", `{span.bi.secret subarray_seq [123]}`},
+		{"mixed operands", `{span.bi.secret subarray_seq ["` + substringTokenCoo + `", 123]}`},
 		{"bad digest", substringQuery(strings.TrimSuffix(substringTokenCoo, "M") + "-")},
 		{"padded digest", substringQuery(substringTokenCoo + "=")},
 		{"bad key id", substringQuery(strings.Replace(substringTokenCoo, "630d", "630D", 1))},
 		{"different key ids", substringQuery(substringTokenCoo, strings.Replace(substringTokenOol, "630d", "730d", 1))},
+		{"negative bad digest", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `="]}`},
+		{"negative different key ids", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `", "` + strings.Replace(substringTokenOol, "630d", "730d", 1) + `"]}`},
+		{"array with public operator", `{span.bi.secret @> ["` + substringTokenCoo + `"]}`},
+		{"string with public operator", `{span.bi.secret @> "substring"}`},
 		{"too many tokens", substringQuery(append(maximumTokens, substringTokenCoo)...)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -91,9 +102,14 @@ func TestSubstringSequenceEvaluation(t *testing.T) {
 		{"insufficient repetitions", query, NewStaticStringArray([]string{substringTokenCoo}), true, false},
 		{"missing array", query, NewStaticNil(), false, false},
 		{"scalar instead of array", query, NewStaticString(substringTokenCoo), true, false},
-		{"negative match", `{!(span.bi.secret @> ["` + substringTokenCoo + `"])}`, NewStaticStringArray([]string{substringTokenOol}), true, true},
-		{"negative missing", `{!(span.bi.secret @> ["` + substringTokenCoo + `"])}`, NewStaticNil(), false, true},
-		{"or second key", `{(span.bi.secret @> ["` + substringTokenCoo + `"]) || (span.bi.secret @> ["` + strings.Replace(substringTokenOol, "630d", "730d", 1) + `"])}`, NewStaticStringArray([]string{strings.Replace(substringTokenOol, "630d", "730d", 1)}), true, true},
+		{"negative match", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `"]}`, NewStaticStringArray([]string{substringTokenOol}), true, true},
+		{"negative missing", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `"]}`, NewStaticNil(), false, false},
+		{"negative match present", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `"]}`, NewStaticStringArray([]string{substringTokenCoo}), true, false},
+		{"negative other key", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `"]}`, NewStaticStringArray([]string{strings.Replace(substringTokenOol, "630d", "730d", 1)}), true, false},
+		{"negative mixed keys", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `"]}`, NewStaticStringArray([]string{substringTokenOol, strings.Replace(substringTokenOol, "630d", "730d", 1)}), true, false},
+		{"negative empty", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `"]}`, NewStaticStringArray([]string{}), true, false},
+		{"negative scalar", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `"]}`, NewStaticString(substringTokenOol), true, false},
+		{"or second key", `{(span.bi.secret subarray_seq ["` + substringTokenCoo + `"]) || (span.bi.secret subarray_seq ["` + strings.Replace(substringTokenOol, "630d", "730d", 1) + `"])}`, NewStaticStringArray([]string{strings.Replace(substringTokenOol, "630d", "730d", 1)}), true, true},
 		{"equality unchanged", `{span.bi.secret = "` + substringTokenCoo + `"}`, NewStaticString(substringTokenCoo), true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,9 +149,10 @@ func TestSubstringConditionExtractionPolarity(t *testing.T) {
 		allConditions bool
 	}{
 		{"positive", substringQuery(substringTokenCoo, substringTokenOol), OpContainsSequence, true},
-		{"negated", `{!(span.bi.secret @> ["` + substringTokenCoo + `"])}`, OpNone, false},
-		{"compared false", `{(span.bi.secret @> ["` + substringTokenCoo + `"]) = false}`, OpNone, false},
-		{"or", `{(span.bi.secret @> ["` + substringTokenCoo + `"]) || (span.bi.secret @> ["` + substringTokenOol + `"])}`, OpContainsSequence, false},
+		{"negative", `{span.bi.secret !subarray_seq ["` + substringTokenCoo + `"]}`, OpNotContainsSequence, true},
+		{"compared false", `{(span.bi.secret subarray_seq ["` + substringTokenCoo + `"]) = false}`, OpNone, false},
+		{"negative compared false", `{(span.bi.secret !subarray_seq ["` + substringTokenCoo + `"]) = false}`, OpNone, false},
+		{"or", `{(span.bi.secret subarray_seq ["` + substringTokenCoo + `"]) || (span.bi.secret subarray_seq ["` + substringTokenOol + `"])}`, OpContainsSequence, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -149,7 +166,7 @@ func TestSubstringConditionExtractionPolarity(t *testing.T) {
 			require.NotEmpty(t, req.Conditions)
 			require.Equal(t, NewScopedAttribute(AttributeScopeSpan, false, "bi.secret"), req.Conditions[0].Attribute)
 			require.Equal(t, tc.expectedOp, req.Conditions[0].Op)
-			if tc.expectedOp == OpContainsSequence {
+			if tc.expectedOp == OpContainsSequence || tc.expectedOp == OpNotContainsSequence {
 				want := 1
 				if tc.name == "or" {
 					want = 2
@@ -166,10 +183,61 @@ func TestSubstringConditionExtractionPolarity(t *testing.T) {
 				}
 			} else {
 				require.Empty(t, req.Conditions[0].Operands)
-				require.Len(t, req.Conditions, 2)
-				require.Equal(t, Condition{Attribute: NewIntrinsic(IntrinsicSpanStartTime), Op: OpNone}, req.Conditions[1])
+				if tc.name == "compared false" || tc.name == "negative compared false" {
+					require.Len(t, req.Conditions, 2)
+					require.Equal(t, Condition{Attribute: NewIntrinsic(IntrinsicSpanStartTime), Op: OpNone}, req.Conditions[1])
+				} else {
+					require.Len(t, req.Conditions, 1)
+				}
 			}
 			require.Equal(t, tc.allConditions, req.AllConditions)
+		})
+	}
+}
+
+func TestLiteralSubstringEvaluation(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		value       Static
+		present     bool
+		want        bool
+	}{
+		{"plain match", `{span.unencrypted @> "ool"}`, NewStaticString("cool"), true, true},
+		{"plain miss", `{span.unencrypted @> "OO"}`, NewStaticString("cool"), true, false},
+		{"negative miss", `{span.unencrypted !@> "OO"}`, NewStaticString("cool"), true, true},
+		{"negative match", `{span.unencrypted !@> "ool"}`, NewStaticString("cool"), true, false},
+		{"missing positive", `{span.unencrypted @> "x"}`, NewStaticNil(), false, false},
+		{"missing negative", `{span.unencrypted !@> "x"}`, NewStaticNil(), false, false},
+		{"wrong type positive", `{span.unencrypted @> "x"}`, NewStaticInt(1), true, false},
+		{"wrong type negative", `{span.unencrypted !@> "x"}`, NewStaticInt(1), true, false},
+		{"NFC haystack", `{span.unencrypted @> "é"}`, NewStaticString("Cafe\u0301"), true, true},
+		{"NFC needle", `{span.unencrypted !@> "e\u0301"}`, NewStaticString("Café"), true, false},
+		{"literal metacharacters", `{span.unencrypted @> ".*"}`, NewStaticString("c.*l"), true, true},
+		{"ciphertext key prefix", `{span.enc.api.token @> "enc:v1:630dcd2966c4336691125448bbb25b4f"}`, NewStaticString("enc:v1:630dcd2966c4336691125448bbb25b4f:7aUwjY5fPtHvu_dUnzcxBJc6XQ"), true, true},
+		{"ciphertext other key", `{span.enc.api.token @> "enc:v1:730dcd2966c4336691125448bbb25b4f"}`, NewStaticString("enc:v1:630dcd2966c4336691125448bbb25b4f:7aUwjY5fPtHvu_dUnzcxBJc6XQ"), true, false},
+		{"ciphertext negative match", `{span.enc.api.token !@> "enc:v1"}`, NewStaticString("enc:v1:630dcd2966c4336691125448bbb25b4f:7aUwjY5fPtHvu_dUnzcxBJc6XQ"), true, false},
+		{"ciphertext negative miss", `{span.enc.api.token !@> "enc:v1:730dcd2966c4336691125448bbb25b4f"}`, NewStaticString("enc:v1:630dcd2966c4336691125448bbb25b4f:7aUwjY5fPtHvu_dUnzcxBJc6XQ"), true, true},
+		{"ciphertext does not decrypt", `{span.enc.api.token @> "abc"}`, NewStaticString("enc:v1:630dcd2966c4336691125448bbb25b4f:7aUwjY5fPtHvu_dUnzcxBJc6XQ"), true, false},
+		{"ciphertext missing negative", `{span.enc.api.token !@> "enc:v1"}`, NewStaticNil(), false, false},
+		{"ciphertext wrong type", `{span.enc.api.token @> "enc:v1"}`, NewStaticInt(1), true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ast, err := Parse(tc.query)
+			require.NoError(t, err)
+			require.NoError(t, ast.validate())
+			pipeline, ok := ast.SinglePipeline()
+			require.True(t, ok)
+			req := FetchSpansRequest{AllConditions: true}
+			pipeline.extractConditions(&req)
+			require.Len(t, req.Conditions, 1)
+			require.Equal(t, OpNone, req.Conditions[0].Op)
+			span := &mockSpan{attributes: map[Attribute]Static{}}
+			if tc.present {
+				span.attributes[req.Conditions[0].Attribute] = tc.value
+			}
+			result, err := pipeline.evaluate([]*Spanset{{Spans: []Span{span}}})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, len(result) == 1)
 		})
 	}
 }

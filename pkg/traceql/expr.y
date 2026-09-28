@@ -119,7 +119,7 @@ import (
 // Operators are listed with increasing precedence.
 %left <binOp> PIPE
 %left <binOp> AND OR
-%left <binOp> EQ NEQ LT LTE GT GTE NRE RE CONTAINS_SEQUENCE DESC ANCE SIBL NOT_CHILD NOT_PARENT NOT_DESC NOT_ANCE UNION_CHILD UNION_PARENT UNION_DESC UNION_ANCE UNION_SIBL
+%left <binOp> EQ NEQ LT LTE GT GTE NRE RE CONTAINS NOT_CONTAINS CONTAINS_SEQUENCE DESC ANCE SIBL NOT_CHILD NOT_PARENT NOT_DESC NOT_ANCE UNION_CHILD UNION_PARENT UNION_DESC UNION_ANCE UNION_SIBL
 %nonassoc INTEGER FLOAT
 %left <binOp> ADD SUB
 %left <binOp> NOT
@@ -480,8 +480,12 @@ fieldExpression:
   | fieldExpression POW fieldExpression      { $$ = newBinaryOperation(OpPower, $1, $3) }
   | fieldExpression AND fieldExpression      { $$ = newBinaryOperation(OpAnd, $1, $3) }
   | fieldExpression OR fieldExpression       { $$ = newBinaryOperation(OpOr, $1, $3) }
+  | fieldExpression CONTAINS fieldExpression { $$ = newBinaryOperation(OpContains, $1, $3) }
+  | fieldExpression NOT_CONTAINS fieldExpression { $$ = newBinaryOperation(OpNotContains, $1, $3) }
   | attributeField CONTAINS_SEQUENCE OPEN_BRACKET stringList CLOSE_BRACKET %prec CONTAINS_SEQUENCE
                                               { $$ = newBinaryOperation(OpContainsSequence, $1, NewStaticStringArray($4)) }
+  | attributeField NOT CONTAINS_SEQUENCE OPEN_BRACKET stringList CLOSE_BRACKET %prec CONTAINS_SEQUENCE
+                                              { $$ = newBinaryOperation(OpNotContainsSequence, $1, NewStaticStringArray($5)) }
   // NIL handling
   | fieldExpression NEQ NIL                  { $$ = newUnaryOperation(OpExists, $1) }
   | NIL NEQ fieldExpression                  { $$ = newUnaryOperation(OpExists, $3) }

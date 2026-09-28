@@ -68,13 +68,13 @@ func (f ScalarFilter) String() string {
 }
 
 func (o *BinaryOperation) String() string {
-	if o.Op == OpContainsSequence {
+	if o.Op == OpContainsSequence || o.Op == OpNotContainsSequence {
 		rhs, ok := o.RHS.(Static)
 		if ok && rhs.Type == TypeStringArray {
 			tokens, _ := rhs.StringArray()
 			var b strings.Builder
 			b.WriteString(o.LHS.String())
-			b.WriteString(" @> [")
+			b.WriteString(" " + o.Op.String() + " [")
 			for i, token := range tokens {
 				if i > 0 {
 					b.WriteString(", ")

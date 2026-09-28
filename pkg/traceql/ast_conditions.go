@@ -49,9 +49,17 @@ func (o SelectOperation) extractConditions(request *FetchSpansRequest) {
 }
 
 func (o *BinaryOperation) extractConditions(request *FetchSpansRequest) {
-	// A positive substring match is a necessary condition only when combined
-	// directly with AND/OR. Other operators can invert its truth value.
-	if o.Op != OpContainsSequence && o.Op != OpAnd && o.Op != OpOr {
+	// Literal substring operators need the full value for NFC comparison and
+	// cannot be implemented by a per-value storage predicate.
+	if o.Op == OpContains || o.Op == OpNotContains {
+		if attr, ok := o.LHS.(Attribute); ok {
+			request.appendCondition(Condition{Attribute: attr, Op: OpNone})
+			return
+		}
+	}
+	// Sequence predicates restrict candidates only when combined directly
+	// with AND/OR. Other operators can invert their truth value.
+	if o.Op != OpContainsSequence && o.Op != OpNotContainsSequence && o.Op != OpAnd && o.Op != OpOr {
 		start := len(request.Conditions)
 		defer degradeSubstringConditions(request, start, false)
 	}
@@ -163,15 +171,16 @@ func (o UnaryOperation) extractConditions(request *FetchSpansRequest) {
 	}
 }
 
-// An inverted substring predicate must not restrict candidates, including
-// spans without a sidecar. Fetch all spans and still load the sidecar when present.
+// Inverting a sequence predicate can match spans without a sidecar. Fetch all
+// spans, while still loading the sidecar when present for final evaluation.
 func degradeSubstringConditions(request *FetchSpansRequest, start int, all bool) {
 	found := false
 	for i := start; i < len(request.Conditions); i++ {
-		if request.Conditions[i].Op == OpContainsSequence {
+		isSequence := request.Conditions[i].Op == OpContainsSequence || request.Conditions[i].Op == OpNotContainsSequence
+		if isSequence {
 			found = true
 		}
-		if all || request.Conditions[i].Op == OpContainsSequence {
+		if all || isSequence {
 			request.Conditions[i].Op = OpNone
 			request.Conditions[i].Operands = nil
 		}

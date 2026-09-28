@@ -2749,6 +2749,13 @@ func TestProtectedSubstringArrayFetch(t *testing.T) {
 		if values != nil {
 			s.Attrs = []Attribute{{Key: "bi.secret", Value: values, IsArray: !scalar}}
 		}
+		if !scalar && len(values) > 2 {
+			plain := "other"
+			if len(values) == 4 {
+				plain = "Cafe\u0301"
+			}
+			s.Attrs = append(s.Attrs, Attribute{Key: "unencrypted", Value: []string{plain}})
+		}
 		return &Trace{TraceID: test.ValidTraceID(nil), ResourceSpans: []ResourceSpans{{
 			Resource: Resource{ServiceName: "substring-test"},
 			ScopeSpans: []ScopeSpans{{Spans: []Span{s}}},
@@ -2759,7 +2766,8 @@ func TestProtectedSubstringArrayFetch(t *testing.T) {
 		makeTrace([]string{a, b, a}, false),
 		makeTrace([]string{b, a, a}, false),
 		makeTrace([]string{a}, false),
-		makeTrace([]string{a}, true), // a scalar must not satisfy @>
+		makeTrace([]string{strings.Replace(a, "630d", "730d", 1), strings.Replace(b, "630d", "730d", 1)}, false),
+		makeTrace([]string{a}, true), // a scalar must not satisfy subarray_seq
 		makeTrace(nil, false),
 	})
 	// v4's dedicated columns are scalar-only; even if the name is configured
@@ -2775,7 +2783,7 @@ func TestProtectedSubstringArrayFetch(t *testing.T) {
 		for i, token := range tokens {
 			quoted[i] = fmt.Sprintf("%q", token)
 		}
-		return `{span.bi.secret @> [` + strings.Join(quoted, ", ") + `]}`
+		return `{span.bi.secret subarray_seq [` + strings.Join(quoted, ", ") + `]}`
 	}
 	for _, tc := range []struct {
 		query string
@@ -2786,8 +2794,12 @@ func TestProtectedSubstringArrayFetch(t *testing.T) {
 		{query(a, b, b), 0},
 		{query(a), 4},
 		{query(c, b), 0},
-		{`{(span.bi.secret @> ["` + c + `", "` + b + `"]) || (span.bi.secret @> ["` + a + `", "` + a + `", "` + b + `"])}`, 1},
-		{`{!(span.bi.secret @> ["` + a + `", "` + a + `", "` + b + `"])}`, 5},
+		{query(strings.Replace(a, "630d", "730d", 1)), 1},
+		{`{(span.bi.secret subarray_seq ["` + c + `", "` + b + `"]) || (span.bi.secret subarray_seq ["` + a + `", "` + a + `", "` + b + `"])}`, 1},
+		{`{span.bi.secret !subarray_seq ["` + a + `", "` + a + `", "` + b + `"]}`, 3},
+		{`{span.unencrypted @> "fé"}`, 1},
+		{`{span.unencrypted !@> "fé"}`, 2},
+		{`{span.unencrypted !@> "other"}`, 1},
 	} {
 		result, err := traceql.NewEngine().ExecuteSearch(ctx, &tempopb.SearchRequest{Query: tc.query}, fetcher)
 		require.NoError(t, err, tc.query)

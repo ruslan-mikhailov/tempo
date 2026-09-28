@@ -51,6 +51,10 @@ const (
 
 	// OpContainsSequence matches an ordered contiguous token slice within one string array.
 	OpContainsSequence
+	OpNotContainsSequence
+	// Public literal substring operators operate on string attributes only.
+	OpContains
+	OpNotContains
 )
 
 func (op Operator) isArithmetic() bool {
@@ -67,6 +71,9 @@ func (op Operator) isBoolean() bool {
 		op == OpGreater ||
 		op == OpGreaterEqual ||
 		op == OpContainsSequence ||
+		op == OpNotContainsSequence ||
+		op == OpContains ||
+		op == OpNotContains ||
 		op == OpLess ||
 		op == OpLessEqual ||
 		op == OpNot ||
@@ -110,10 +117,26 @@ func binaryTypeValid(op Operator, t StaticType) bool {
 			op == OpLessEqual ||
 			op == OpIn ||
 			op == OpNotIn
-	case TypeString, TypeStringArray:
+	case TypeString:
+		return op == OpEqual ||
+			op == OpNotEqual ||
+			op == OpContains ||
+			op == OpNotContains ||
+			op == OpRegex ||
+			op == OpNotRegex ||
+			op == OpGreater ||
+			op == OpGreaterEqual ||
+			op == OpLess ||
+			op == OpLessEqual ||
+			op == OpIn ||
+			op == OpNotIn ||
+			op == OpRegexMatchAny ||
+			op == OpRegexMatchNone
+	case TypeStringArray:
 		return op == OpEqual ||
 			op == OpNotEqual ||
 			op == OpContainsSequence ||
+			op == OpNotContainsSequence ||
 			op == OpRegex ||
 			op == OpNotRegex ||
 			op == OpGreater ||
@@ -189,7 +212,13 @@ func (op Operator) String() string {
 	case OpNotEqual:
 		return "!="
 	case OpContainsSequence:
+		return "subarray_seq"
+	case OpNotContainsSequence:
+		return "!subarray_seq"
+	case OpContains:
 		return "@>"
+	case OpNotContains:
+		return "!@>"
 	case OpRegex:
 		return "=~"
 	case OpNotRegex:

@@ -597,7 +597,7 @@ func TestProtectedSubstringWALArrayFetch(t *testing.T) {
 		}}})
 	require.NoError(t, w.AppendTrace(id, tr, 0, 0, false))
 	require.NoError(t, w.Flush())
-	query := fmt.Sprintf(`{span.bi.secret @> [%q, %q, %q]}`, a, a, b)
+	query := fmt.Sprintf(`{span.bi.secret subarray_seq [%q, %q, %q]}`, a, a, b)
 	resp, err := w.Fetch(t.Context(), traceql.MustExtractFetchSpansRequestWithMetadata(query), common.DefaultSearchOptions())
 	require.NoError(t, err)
 	defer resp.Results.Close()

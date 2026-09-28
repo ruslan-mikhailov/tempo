@@ -1111,10 +1111,10 @@ func checkConditions(conditions []traceql.Condition) error {
 				return fmt.Errorf("operation %v must have exactly 1 argument. condition: %+v", cond.Op, cond)
 			}
 
-		case traceql.OpContainsSequence:
+		case traceql.OpContainsSequence, traceql.OpNotContainsSequence:
 			if opCount != 1 || cond.Operands[0].Type != traceql.TypeStringArray ||
 				cond.Attribute.Scope != traceql.AttributeScopeSpan {
-				return fmt.Errorf("@> requires one span string-array operand")
+				return fmt.Errorf("%s requires one span string-array operand", cond.Op)
 			}
 
 		case traceql.OpNotExists:
@@ -2002,7 +2002,7 @@ func createSpanIterator(makeIter, makeNilIter makeIterFn, innerIterators []parqu
 	}
 
 	for _, cond := range conditions {
-		if cond.Op == traceql.OpContainsSequence ||
+		if cond.Op == traceql.OpContainsSequence || cond.Op == traceql.OpNotContainsSequence ||
 			(cond.Op == traceql.OpNone && len(cond.Attribute.Name) >= 3 && cond.Attribute.Name[:3] == "bi.") {
 			// v4 dedicated columns are scalar-only. Array values, even for names
 			// configured as dedicated, are stored in the generic attributes.

@@ -25,7 +25,10 @@ var tokenMap = map[string]int{
 	"=":                   EQ,
 	"!=":                  NEQ,
 	"=~":                  RE,
-	"@>":                  CONTAINS_SEQUENCE,
+	"@>":                  CONTAINS,
+	"!@":                  NOT,
+	"!@>":                 NOT_CONTAINS,
+	"subarray_seq":        CONTAINS_SEQUENCE,
 	"!~":                  NRE, // also "not sibling"
 	">":                   GT,
 	">=":                  GTE,
