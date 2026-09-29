@@ -363,6 +363,7 @@ func (s *BackendScheduler) Next(ctx context.Context, req *tempopb.NextJobRequest
 						j.JobDetail.Redaction.TraceIds = batch.TraceIds
 						j.JobDetail.Redaction.Query = batch.Query
 						j.JobDetail.Redaction.AttributeRedaction = batch.AttributeRedaction
+						j.JobDetail.Redaction.AttributeRedactions = batch.AttributeRedactions
 						j.JobDetail.Redaction.Mode = batch.Mode
 						j.JobDetail.Redaction.StartTimeUnixNano = batch.StartTimeUnixNano
 						j.JobDetail.Redaction.EndTimeUnixNano = batch.EndTimeUnixNano
@@ -480,6 +481,12 @@ func (s *BackendScheduler) UpdateJob(ctx context.Context, req *tempopb.UpdateJob
 	}, nil
 }
 
+// SubmitAttributeRedaction schedules one batch for a validated list of adjacent enc./bi. pairs.
+// No attribute names or value prefixes are recorded in logs or spans.
+func (s *BackendScheduler) SubmitAttributeRedaction(ctx context.Context, req *tempopb.SubmitRedactionRequest) (*tempopb.SubmitRedactionResponse, error) {
+	return s.submitRedaction(ctx, req, true)
+}
+
 // SubmitRedaction implements the BackendSchedulerServer interface. The tenant is sourced
 // exclusively from the authenticated request context (X-Scope-OrgID header); any tenant_id
 // field on the request body is ignored. This prevents a cross-tenant escalation where an
@@ -488,6 +495,10 @@ func (s *BackendScheduler) UpdateJob(ctx context.Context, req *tempopb.UpdateJob
 // one pending job per block. The operation is stored in a shared batch manifest rather than
 // in each job, avoiding a copy of a potentially large trace ID list across pending jobs.
 func (s *BackendScheduler) SubmitRedaction(ctx context.Context, req *tempopb.SubmitRedactionRequest) (*tempopb.SubmitRedactionResponse, error) {
+	return s.submitRedaction(ctx, req, false)
+}
+
+func (s *BackendScheduler) submitRedaction(ctx context.Context, req *tempopb.SubmitRedactionRequest, paired bool) (*tempopb.SubmitRedactionResponse, error) {
 	_, span := tracer.Start(ctx, "SubmitRedaction")
 	defer span.End()
 
@@ -497,6 +508,16 @@ func (s *BackendScheduler) SubmitRedaction(ctx context.Context, req *tempopb.Sub
 			return nil, status.Error(codes.Unauthenticated, err.Error())
 		}
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "redaction request is required")
+	}
+	if paired {
+		if len(req.AttributeRedactions) == 0 {
+			return nil, status.Error(codes.InvalidArgument, "attribute_redactions must contain at least one enc/bi pair")
+		}
+	} else if len(req.AttributeRedactions) != 0 {
+		return nil, status.Error(codes.InvalidArgument, "attribute_redactions require SubmitAttributeRedaction")
 	}
 	querySel := req.GetQuery()
 	if err := validateRedactionRequest(req, querySel); err != nil {
@@ -635,15 +656,16 @@ func (s *BackendScheduler) SubmitRedaction(ctx context.Context, req *tempopb.Sub
 	}
 
 	batch := &tempopb.RedactionBatch{
-		BatchId:            batchID,
-		TenantId:           tenant,
-		TraceIds:           req.TraceIds,
-		Query:              querySel,
-		AttributeRedaction: req.AttributeRedaction,
-		Mode:               req.Mode,
-		StartTimeUnixNano:  req.StartTimeUnixNano,
-		EndTimeUnixNano:    req.EndTimeUnixNano,
-		CreatedAtUnixNano:  time.Now().UnixNano(),
+		BatchId:             batchID,
+		TenantId:            tenant,
+		TraceIds:            req.TraceIds,
+		Query:               querySel,
+		AttributeRedaction:  req.AttributeRedaction,
+		AttributeRedactions: req.AttributeRedactions,
+		Mode:                req.Mode,
+		StartTimeUnixNano:   req.StartTimeUnixNano,
+		EndTimeUnixNano:     req.EndTimeUnixNano,
+		CreatedAtUnixNano:   time.Now().UnixNano(),
 	}
 	// Only apply-mode batches arm a rescan. A dry-run rewrites nothing, so there is no output
 	// block to re-cover once a skipped compaction finishes; a rescan would only re-count and

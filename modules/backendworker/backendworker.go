@@ -402,7 +402,16 @@ func (w *BackendWorker) processRedactionJob(ctx context.Context, resp *tempopb.N
 
 	var tracesFound int
 	var err error
-	if rule != nil {
+	if len(rd.AttributeRedactions) != 0 {
+		if rule != nil || len(rd.TraceIds) != 0 || query != "" {
+			return w.failJob(ctx, resp.JobId, "received paired attribute redaction job with another selector")
+		}
+		level.Debug(log.Logger).Log("msg", "processing paired attribute redaction job", "job_id", resp.JobId, "block_id", blockIDStr, "mode", mode.String())
+		_, tracesFound, _, err = w.store.RedactBlockAttributePairs(ctx, meta, tenantID, rd.AttributeRedactions, mode, window)
+		if err != nil {
+			return w.failJob(ctx, resp.JobId, "redact block attribute pairs failed")
+		}
+	} else if rule != nil {
 		if len(rd.TraceIds) != 0 || query != "" {
 			return w.failJob(ctx, resp.JobId, "received attribute redaction job with a trace deletion selector")
 		}

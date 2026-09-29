@@ -6,9 +6,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/status"
 	"github.com/grafana/dskit/user"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
 
 	"github.com/grafana/tempo/v3/modules/overrides"
 	"github.com/grafana/tempo/v3/modules/storage"
@@ -134,4 +136,132 @@ func TestSubmitRedactionQueryEndToEnd(t *testing.T) {
 
 	require.Equal(t, 1, totalFound, "exactly the one matching trace is selected across all blocks")
 	require.Equal(t, 1, rewroteBlocks, "only the block containing the match is rewritten")
+}
+
+func TestSubmitAttributeRedactionPersistsAndDispatchesOneBatch(t *testing.T) {
+	cfg := Config{}
+	cfg.RegisterFlagsAndApplyDefaults("", &flag.FlagSet{})
+	tmpDir := t.TempDir()
+	cfg.LocalWorkPath = tmpDir + "/work"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	store, rr, ww := newStore(ctx, t, tmpDir)
+	defer func() {
+		cancel()
+		store.Shutdown()
+	}()
+	limits, err := overrides.NewOverrides(overrides.Config{Defaults: overrides.Overrides{}}, nil, prometheus.NewRegistry())
+	require.NoError(t, err)
+	s, err := New(cfg, store, limits, rr, ww)
+	require.NoError(t, err)
+
+	const tenant = "tenant-paired-redaction"
+	writeTenantBlocks(ctx, t, backend.NewWriter(ww), tenant, 2)
+	require.Eventually(t, func() bool { return len(store.BlockMetas(tenant)) == 2 }, 3*time.Second, 50*time.Millisecond)
+	const kid = "0123456789abcdef0123456789abcdef"
+	rules := []*tempopb.AttributeRedaction{
+		{Key: "span.enc.secret", ValuePrefix: "enc:v1:" + kid},
+		{Key: "span.bi.secret", ValuePrefix: "bi:v1:" + kid},
+		{Key: "resource.enc.account", ValuePrefix: "enc:v1:" + kid},
+		{Key: "resource.bi.account", ValuePrefix: "bi:v1:" + kid},
+	}
+	resp, err := s.SubmitAttributeRedaction(user.InjectOrgID(ctx, tenant), &tempopb.SubmitRedactionRequest{
+		AttributeRedactions: rules,
+		Mode:                tempopb.RedactionMode_REDACTION_MODE_DRY_RUN,
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, resp.JobsCreated)
+	require.Len(t, s.work.ListAllPendingJobs(), 2, "all pairs must share one job per block")
+	require.Equal(t, rules, s.work.GetBatch(tenant).AttributeRedactions)
+	require.Equal(t, resp.BatchId, s.work.GetBatch(tenant).BatchId)
+	require.NoError(t, s.work.FlushBatchesToLocal(ctx, cfg.LocalWorkPath))
+	require.NoError(t, s.work.FlushToLocal(ctx, cfg.LocalWorkPath, nil))
+
+	reloaded, err := New(cfg, store, limits, rr, ww)
+	require.NoError(t, err)
+	require.NoError(t, reloaded.work.LoadFromLocal(ctx, cfg.LocalWorkPath))
+	require.NoError(t, reloaded.work.LoadBatchesFromLocal(ctx, cfg.LocalWorkPath))
+	require.Equal(t, rules, reloaded.work.GetBatch(tenant).AttributeRedactions)
+	seen := make(map[string]bool)
+	for range 2 {
+		job := reloaded.work.NextPendingJob(tempopb.JobType_JOB_TYPE_REDACTION)
+		require.NotNil(t, job)
+		reloaded.mergedJobs <- job
+		next, err := reloaded.Next(ctx, &tempopb.NextJobRequest{WorkerId: job.ID})
+		require.NoError(t, err)
+		require.Equal(t, resp.BatchId, next.Detail.BatchId)
+		require.Nil(t, next.Detail.Redaction.AttributeRedaction)
+		require.Equal(t, rules, next.Detail.Redaction.AttributeRedactions)
+		require.Equal(t, tempopb.RedactionMode_REDACTION_MODE_DRY_RUN, next.Detail.Redaction.Mode)
+		seen[next.Detail.Redaction.BlockId] = true
+	}
+	require.Len(t, seen, 2, "each block gets exactly one job with all pairs")
+	require.Nil(t, reloaded.work.NextPendingJob(tempopb.JobType_JOB_TYPE_REDACTION))
+}
+
+func TestSubmitAttributeRedactionRejectsMalformedPairs(t *testing.T) {
+	cfg := Config{}
+	cfg.RegisterFlagsAndApplyDefaults("", &flag.FlagSet{})
+	tmpDir := t.TempDir()
+	cfg.LocalWorkPath = tmpDir + "/work"
+	ctx, cancel := context.WithCancel(context.Background())
+	store, rr, ww := newStore(ctx, t, tmpDir)
+	defer func() {
+		cancel()
+		store.Shutdown()
+	}()
+	limits, err := overrides.NewOverrides(overrides.Config{Defaults: overrides.Overrides{}}, nil, prometheus.NewRegistry())
+	require.NoError(t, err)
+	s, err := New(cfg, store, limits, rr, ww)
+	require.NoError(t, err)
+	tenantCtx := user.InjectOrgID(ctx, "tenant-invalid-pairs")
+
+	const kid = "0123456789abcdef0123456789abcdef"
+	enc := &tempopb.AttributeRedaction{Key: "span.enc.secret", ValuePrefix: "enc:v1:" + kid}
+	bi := &tempopb.AttributeRedaction{Key: "span.bi.secret", ValuePrefix: "bi:v1:" + kid}
+	otherKid := &tempopb.AttributeRedaction{Key: bi.Key, ValuePrefix: "bi:v1:abcdef0123456789abcdef0123456789"}
+	tooMany := make([]*tempopb.AttributeRedaction, 0, 66)
+	for range 33 {
+		tooMany = append(tooMany, enc, bi)
+	}
+	for _, tc := range []struct {
+		name  string
+		rules []*tempopb.AttributeRedaction
+	}{
+		{"empty", nil},
+		{"odd count", []*tempopb.AttributeRedaction{enc}},
+		{"wrong order", []*tempopb.AttributeRedaction{bi, enc}},
+		{"wrong scope", []*tempopb.AttributeRedaction{enc, {Key: "resource.bi.secret", ValuePrefix: bi.ValuePrefix}}},
+		{"wrong suffix", []*tempopb.AttributeRedaction{enc, {Key: "span.bi.other", ValuePrefix: bi.ValuePrefix}}},
+		{"empty suffix", []*tempopb.AttributeRedaction{{Key: "span.enc.", ValuePrefix: enc.ValuePrefix}, {Key: "span.bi.", ValuePrefix: bi.ValuePrefix}}},
+		{"mismatched kid", []*tempopb.AttributeRedaction{enc, otherKid}},
+		{"uppercase kid", []*tempopb.AttributeRedaction{{Key: enc.Key, ValuePrefix: "enc:v1:ABCDEF0123456789abcdef0123456789"}, bi}},
+		{"short kid", []*tempopb.AttributeRedaction{{Key: enc.Key, ValuePrefix: "enc:v1:a"}, bi}},
+		{"nil rule", []*tempopb.AttributeRedaction{enc, nil}},
+		{"duplicate pair", []*tempopb.AttributeRedaction{enc, bi, enc, bi}},
+		{"too many", tooMany},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.SubmitAttributeRedaction(tenantCtx, &tempopb.SubmitRedactionRequest{AttributeRedactions: tc.rules})
+			require.Equal(t, codes.InvalidArgument, status.Code(err))
+			require.NotContains(t, err.Error(), kid, "validation must not expose token prefixes")
+		})
+	}
+	_, err = s.SubmitAttributeRedaction(tenantCtx, &tempopb.SubmitRedactionRequest{
+		AttributeRedactions: []*tempopb.AttributeRedaction{enc, bi},
+		TraceIds:            [][]byte{[]byte("trace")},
+	})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = s.SubmitAttributeRedaction(tenantCtx, &tempopb.SubmitRedactionRequest{
+		AttributeRedactions: []*tempopb.AttributeRedaction{enc, bi},
+		AttributeRedaction:  enc,
+	})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = s.SubmitAttributeRedaction(tenantCtx, &tempopb.SubmitRedactionRequest{
+		AttributeRedactions: []*tempopb.AttributeRedaction{enc, bi},
+		Selector:            &tempopb.SubmitRedactionRequest_Query{Query: &tempopb.TraceQLSelector{Query: `{span.name = "secret"}`}},
+	})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+	_, err = s.SubmitRedaction(tenantCtx, &tempopb.SubmitRedactionRequest{AttributeRedactions: []*tempopb.AttributeRedaction{enc, bi}})
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
 }

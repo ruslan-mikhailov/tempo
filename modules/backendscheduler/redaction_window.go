@@ -122,13 +122,14 @@ const maxRedactionTraceIDs = 1000
 // error. Every check fails closed: on a redaction, a refused request destroys nothing while a
 // misinterpreted one cannot be undone.
 func validateRedactionRequest(req *tempopb.SubmitRedactionRequest, querySel *tempopb.TraceQLSelector) error {
-	// Exactly one operation. The proto reserves a single-member oneof for query; trace_ids
-	// and attribute_redaction remain outside it and are checked explicitly here.
+	// Exactly one operation. The proto reserves a single-member oneof for query; the other
+	// selectors remain outside it and are checked explicitly here.
 	hasIDs := len(req.TraceIds) > 0
 	hasQuery := querySel != nil
 	hasAttribute := req.AttributeRedaction != nil
-	if count := boolToInt(hasIDs) + boolToInt(hasQuery) + boolToInt(hasAttribute); count != 1 {
-		return status.Error(codes.InvalidArgument, "exactly one of trace_ids, query or attribute_redaction must be set")
+	hasPairs := len(req.AttributeRedactions) > 0
+	if count := boolToInt(hasIDs) + boolToInt(hasQuery) + boolToInt(hasAttribute) + boolToInt(hasPairs); count != 1 {
+		return status.Error(codes.InvalidArgument, "exactly one of trace_ids, query, attribute_redaction or attribute_redactions must be set")
 	}
 	if hasQuery {
 		if err := validateRedactionQuery(querySel.Query); err != nil {
@@ -143,6 +144,11 @@ func validateRedactionRequest(req *tempopb.SubmitRedactionRequest, querySel *tem
 		}
 		if rule.ValuePrefix == "" {
 			return status.Error(codes.InvalidArgument, "attribute_redaction.value_prefix must not be empty")
+		}
+	}
+	if hasPairs {
+		if err := validateAttributePairs(req.AttributeRedactions); err != nil {
+			return err
 		}
 	}
 
@@ -188,6 +194,60 @@ func validateRedactionRequest(req *tempopb.SubmitRedactionRequest, querySel *tem
 	}
 
 	return nil
+}
+
+// maxAttributeRedactionPairs limits the per-job manifest injection and per-block scan.
+const maxAttributeRedactionPairs = 32
+
+// validateAttributePairs rejects malformed/mismatched sidecars before scheduling any block work.
+// Error messages intentionally omit keys and prefixes, which may identify sensitive fields.
+func validateAttributePairs(rules []*tempopb.AttributeRedaction) error {
+	if len(rules) == 0 || len(rules)%2 != 0 || len(rules) > 2*maxAttributeRedactionPairs {
+		return status.Error(codes.InvalidArgument, "attribute_redactions must contain 1 to 32 adjacent enc/bi pairs")
+	}
+	seen := make(map[string]struct{}, len(rules)/2)
+	for i := 0; i < len(rules); i += 2 {
+		enc, bi := rules[i], rules[i+1]
+		if enc == nil || bi == nil {
+			return status.Error(codes.InvalidArgument, "attribute_redactions contains a missing pair member")
+		}
+		var scope, suffix string
+		switch {
+		case strings.HasPrefix(enc.Key, "span.enc."):
+			scope, suffix = "span.", strings.TrimPrefix(enc.Key, "span.enc.")
+		case strings.HasPrefix(enc.Key, "resource.enc."):
+			scope, suffix = "resource.", strings.TrimPrefix(enc.Key, "resource.enc.")
+		default:
+			return status.Error(codes.InvalidArgument, "attribute_redactions must pair scoped enc. keys with bi. keys")
+		}
+		if suffix == "" || bi.Key != scope+"bi."+suffix {
+			return status.Error(codes.InvalidArgument, "attribute_redactions must pair scoped enc. keys with bi. keys")
+		}
+		if _, duplicate := seen[enc.Key]; duplicate {
+			return status.Error(codes.InvalidArgument, "attribute_redactions contains a duplicate encrypted field")
+		}
+		seen[enc.Key] = struct{}{}
+		const kidSize = 32
+		if !validPairPrefix(enc.ValuePrefix, "enc:v1:", kidSize) ||
+			!validPairPrefix(bi.ValuePrefix, "bi:v1:", kidSize) ||
+			enc.ValuePrefix[len("enc:v1:"):] != bi.ValuePrefix[len("bi:v1:"):] {
+			return status.Error(codes.InvalidArgument, "attribute_redactions must have matching lowercase 32-hex key IDs")
+		}
+	}
+	return nil
+}
+
+func validPairPrefix(value, marker string, kidSize int) bool {
+	if len(value) != len(marker)+kidSize || !strings.HasPrefix(value, marker) {
+		return false
+	}
+	for i := len(marker); i < len(value); i++ {
+		c := value[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func boolToInt(b bool) int {

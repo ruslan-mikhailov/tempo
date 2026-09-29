@@ -17,6 +17,61 @@ type AttributeRedactionRule struct {
 	Scope              backend.DedicatedColumnScope
 	Key, Prefix        string
 	StartNano, EndNano uint64
+	// Pairs are applied together to each trace in a single compaction pass.
+	Pairs []AttributeRedactionPair
+}
+
+// AttributeRedactionPair removes BiKey only in scopes where Enc matched.
+type AttributeRedactionPair struct {
+	Enc      AttributeRedactionRule
+	BiKey    string
+	BiPrefix string
+}
+
+// MatchesSidecar requires the delimiter after the key ID; a prefix of another
+// key ID must not be treated as the same key.
+func (p *AttributeRedactionPair) MatchesSidecar(s string) bool {
+	return strings.HasPrefix(s, p.BiPrefix+":")
+}
+
+// LegacySidecar preserves the permissive single-rule prefix while deriving its
+// matching sidecar key ID. Unrelated legacy rules have no sidecar.
+func (r *AttributeRedactionRule) LegacySidecar() (AttributeRedactionPair, bool) {
+	if !strings.HasPrefix(r.Key, "enc.") || !strings.HasPrefix(r.Prefix, "enc:v1:") {
+		return AttributeRedactionPair{}, false
+	}
+	kid := strings.TrimSuffix(strings.TrimPrefix(r.Prefix, "enc:v1:"), ":")
+	if kid == "" || strings.Contains(kid, ":") {
+		return AttributeRedactionPair{}, false
+	}
+	return AttributeRedactionPair{Enc: *r, BiKey: "bi." + strings.TrimPrefix(r.Key, "enc."), BiPrefix: "bi:v1:" + kid}, true
+}
+
+// RedactPairAttributes changes encryption values and removes the paired sidecar
+// only when that same resource or span contains a matching encryption value.
+// The generic representation differs across parquet versions; callers supply
+// their value accessors without converting the rest of the trace.
+func RedactPairAttributes[T any](attrs []T, pair *AttributeRedactionPair, key func(*T) string, encValue func(*T) string, sidecarMatches func(*T, *AttributeRedactionPair) bool, redact func(*T), apply, matched bool) ([]T, bool) {
+	for i := range attrs {
+		a := &attrs[i]
+		if key(a) == pair.Enc.Key && pair.Enc.MatchesValue(encValue(a)) {
+			matched = true
+			if apply {
+				redact(a)
+			}
+		}
+	}
+	if !matched || !apply {
+		return attrs, matched
+	}
+	kept := attrs[:0]
+	for i := range attrs {
+		a := &attrs[i]
+		if key(a) != pair.BiKey || !sidecarMatches(a, pair) {
+			kept = append(kept, attrs[i])
+		}
+	}
+	return kept, matched
 }
 
 func (r *AttributeRedactionRule) MatchesTime(start, end uint64) bool {
@@ -27,8 +82,17 @@ func (r *AttributeRedactionRule) MatchesTime(start, end uint64) bool {
 // as a byte-array value. It avoids reconstructing unrelated traces.
 func (r *AttributeRedactionRule) RowMightMatch(row parquet.Row) bool {
 	for _, value := range row {
-		if value.Kind() == parquet.ByteArray && strings.HasPrefix(string(value.ByteArray()), r.Prefix) {
+		if value.Kind() != parquet.ByteArray {
+			continue
+		}
+		s := string(value.ByteArray())
+		if len(r.Pairs) == 0 && strings.HasPrefix(s, r.Prefix) {
 			return true
+		}
+		for i := range r.Pairs {
+			if r.Pairs[i].Enc.MatchesValue(s) {
+				return true
+			}
 		}
 	}
 	return false

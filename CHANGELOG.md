@@ -1,5 +1,6 @@
 <!-- next version -->
 
+- `redaction`: Add `SubmitAttributeRedaction` for one backend batch of up to 32 protected `enc.*`/`bi.*` pairs. Replace matching ciphertext with `[REDACTED]` and remove the paired blind-index attribute on the same record in one block rewrite; the legacy single-attribute RPC also removes a paired sidecar when its encrypted value matches.
 - `redaction`: Stop serving a redaction source from the rewriting worker's blocklist before its next poll, and report dry-run matches as `block_rewrote=false` in scheduler logs. Other readers and live-store copies retain their existing polling and aging behavior.
 - `traceql`: Allow native literal `@>`/`!@>` on stored `enc.*` string attributes for ciphertext inspection. These operators do not decrypt values; blind-index arrays still require the internal sequence operators.
 

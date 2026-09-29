@@ -55,6 +55,7 @@ For externally supported gRPC API, [refer to Tempo gRPC API](#tempo-grpc-api).
 | [List build information](#list-build-information)                                     | Status                                    | HTTP | `GET /api/status/buildinfo`                               |
 | [Backend scheduler job status](#backend-scheduler-job-status)                        | Backend scheduler                         | HTTP | `GET /status/backendscheduler`                            |
 | [Submit attribute redaction](#submit-attribute-redaction-grpc)                     | Backend scheduler                         | gRPC | `tempopb.BackendScheduler/SubmitRedaction`               |
+| [Submit paired protected-attribute redaction](#submit-paired-protected-attribute-redaction-grpc) | Backend scheduler | gRPC | `tempopb.BackendScheduler/SubmitAttributeRedaction` |
 | [MCP Server](https://grafana.com/docs/tempo/<TEMPO_VERSION>/api_docs/mcp-server) (\*) | MCP                                       |      | `/api/mcp`                                                |
 
 _(\*) This endpoint isn't always available, check the specific section for more details._
@@ -1084,6 +1085,41 @@ A second in-progress submission for the same tenant returns `AlreadyExists`.
 Disabled tenant compaction or a dry run with all overlapping blocks busy returns
 `FailedPrecondition`; no tenant blocks or no blocks overlapping the window returns
 `NotFound`.
+
+### Submit paired protected-attribute redaction (gRPC)
+
+Use `tempopb.BackendScheduler/SubmitAttributeRedaction` to submit up to 32
+same-scope `enc.*`/`bi.*` pairs for one tenant in **one** scheduler batch. This
+is a gRPC endpoint on the backend scheduler, not a Tempo HTTP query endpoint.
+Send `X-Scope-OrgID` as trusted gRPC metadata; the scheduler does not authorize
+the tenant header itself. Its `SubmitRedactionRequest` carries
+`attributeRedactions` with an adjacent pair for each selected field:
+
+```json
+{
+  "attributeRedactions": [
+    {"key": "span.enc.secret", "valuePrefix": "enc:v1:630dcd2966c4336691125448bbb25b4f"},
+    {"key": "span.bi.secret", "valuePrefix": "bi:v1:630dcd2966c4336691125448bbb25b4f"}
+  ]
+}
+```
+
+Each pair must have the same `span` or `resource` scope, field suffix, and key
+ID. A matching scalar `enc.*` value is replaced with `[REDACTED]` and the
+corresponding `bi.*` attribute is **removed** from that same span or resource,
+including its array of substring tokens. A `bi.*` attribute without a matching
+`enc.*` value is not removed. All pairs are evaluated in one read-only scan
+followed, for APPLY with matches, by one replacement block per source block;
+DRY_RUN writes nothing. Matches are counted per trace, not per attribute.
+Malformed, mismatched, or mixed-selector requests are rejected before jobs
+are queued. Like ordinary redaction, an accepted batch is not a
+reader-visibility or physical-erasure barrier: live-store and cached reads can
+still surface old values, and the compacted source block remains until its
+retention pass.
+
+The existing `SubmitRedaction` method still handles trace deletion, TraceQL
+selection, and a single attribute rule. Its `enc.*` replacement also removes
+the paired `bi.*` attribute on the same matched record.
 
 This is a one-time rewrite of backend blocks, not an ingestion-time redaction policy.
 Traces still in ingest or arriving after submission aren't covered. An APPLY job writes

@@ -125,6 +125,7 @@ type Compactor interface {
 
 	RedactBlock(ctx context.Context, meta *backend.BlockMeta, tenantID string, traceIDs []common.ID, query string, mode tempopb.RedactionMode, window RedactionWindow) (rewrote bool, found int, newMeta *backend.BlockMeta, err error)
 	RedactBlockAttributes(ctx context.Context, meta *backend.BlockMeta, tenantID string, rule *tempopb.AttributeRedaction, mode tempopb.RedactionMode, window RedactionWindow) (rewrote bool, found int, newMeta *backend.BlockMeta, err error)
+	RedactBlockAttributePairs(ctx context.Context, meta *backend.BlockMeta, tenantID string, rules []*tempopb.AttributeRedaction, mode tempopb.RedactionMode, window RedactionWindow) (rewrote bool, found int, newMeta *backend.BlockMeta, err error)
 }
 
 type CompactorSharder interface {

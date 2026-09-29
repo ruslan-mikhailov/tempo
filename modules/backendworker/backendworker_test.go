@@ -127,6 +127,10 @@ func (i *mockScheduler) SubmitRedaction(_ context.Context, _ *tempopb.SubmitReda
 	return &tempopb.SubmitRedactionResponse{}, nil
 }
 
+func (i *mockScheduler) SubmitAttributeRedaction(_ context.Context, _ *tempopb.SubmitRedactionRequest, _ ...grpc.CallOption) (*tempopb.SubmitRedactionResponse, error) {
+	return &tempopb.SubmitRedactionResponse{}, nil
+}
+
 func nextNoop(_ context.Context, _ *tempopb.NextJobRequest, _ ...grpc.CallOption) (*tempopb.NextJobResponse, error) {
 	return &tempopb.NextJobResponse{}, nil
 }
@@ -328,6 +332,64 @@ func TestProcessAttributeRedactionJob(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tempopb.JobStatus_JOB_STATUS_SUCCEEDED, got.Status)
 		require.EqualValues(t, 1, got.Redaction.TracesFound)
+	}
+}
+
+func TestProcessPairedAttributeRedactionJob(t *testing.T) {
+	ctx := context.Background()
+	store, _, _ := newStore(ctx, t, t.TempDir())
+	const tenantID = "tenant-paired-attribute-worker"
+	const kid = "0123456789abcdef0123456789abcdef"
+	id := test.ValidTraceID(nil)
+	tr := test.MakeTraceWithSpanCount(1, 1, id)
+	tr.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes = append(
+		tr.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes,
+		&v1_common.KeyValue{Key: "enc.first", Value: &v1_common.AnyValue{Value: &v1_common.AnyValue_StringValue{StringValue: "enc:v1:" + kid + ":ciphertext"}}},
+		&v1_common.KeyValue{Key: "bi.first", Value: &v1_common.AnyValue{Value: &v1_common.AnyValue_StringValue{StringValue: "bi:v1:" + kid + ":digest"}}},
+		&v1_common.KeyValue{Key: "enc.second", Value: &v1_common.AnyValue{Value: &v1_common.AnyValue_StringValue{StringValue: "enc:v1:" + kid + ":ciphertext"}}},
+		&v1_common.KeyValue{Key: "bi.second", Value: &v1_common.AnyValue{Value: &v1_common.AnyValue_StringValue{StringValue: "bi:v1:" + kid + ":digest"}}},
+	)
+	head, err := store.WAL().NewBlock(&backend.BlockMeta{BlockID: backend.NewUUID(), TenantID: tenantID}, model.CurrentEncoding)
+	require.NoError(t, err)
+	now := uint32(time.Now().Unix())
+	writeTraceToWal(t, head, model.MustNewSegmentDecoder(model.CurrentEncoding), id, tr, now, now)
+	block, err := store.CompleteBlock(ctx, head)
+	require.NoError(t, err)
+	store.PollNow(ctx)
+	require.Len(t, store.BlockMetas(tenantID), 1)
+
+	var got *tempopb.UpdateJobStatusRequest
+	w := &BackendWorker{
+		store: store,
+		backendScheduler: &mockScheduler{updateJob: func(_ context.Context, req *tempopb.UpdateJobStatusRequest, _ ...grpc.CallOption) (*tempopb.UpdateJobStatusResponse, error) {
+			got = req
+			return &tempopb.UpdateJobStatusResponse{Success: true}, nil
+		}},
+	}
+	rules := []*tempopb.AttributeRedaction{
+		{Key: "span.enc.first", ValuePrefix: "enc:v1:" + kid},
+		{Key: "span.bi.first", ValuePrefix: "bi:v1:" + kid},
+		{Key: "span.enc.second", ValuePrefix: "enc:v1:" + kid},
+		{Key: "span.bi.second", ValuePrefix: "bi:v1:" + kid},
+	}
+	for _, mode := range []tempopb.RedactionMode{
+		tempopb.RedactionMode_REDACTION_MODE_DRY_RUN,
+		tempopb.RedactionMode_REDACTION_MODE_APPLY,
+	} {
+		err = w.processRedactionJob(ctx, &tempopb.NextJobResponse{
+			JobId: "paired-job",
+			Detail: tempopb.JobDetail{
+				Tenant: tenantID,
+				Redaction: &tempopb.RedactionDetail{
+					BlockId:             block.BlockMeta().BlockID.String(),
+					AttributeRedactions: rules,
+					Mode:                mode,
+				},
+			},
+		})
+		require.NoError(t, err)
+		require.Equal(t, tempopb.JobStatus_JOB_STATUS_SUCCEEDED, got.Status)
+		require.EqualValues(t, 1, got.Redaction.TracesFound, "multiple matching pairs in one trace count once")
 	}
 }
 

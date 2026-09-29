@@ -17,6 +17,8 @@ service BackendScheduler {
   // Submit a trace deletion or attribute replacement for the authenticated tenant.
   // The scheduler discovers that tenant's blocks and fans out one job per block.
   rpc SubmitRedaction(SubmitRedactionRequest) returns (SubmitRedactionResponse) {}
+  // Submit paired encrypted attributes and blind-index sidecars as one batch.
+  rpc SubmitAttributeRedaction(SubmitRedactionRequest) returns (SubmitRedactionResponse) {}
 }
 
 enum JobType {
@@ -74,7 +76,7 @@ message AttributeRedaction {
 }
 
 // RedactionDetail contains fields for redaction jobs (one job per block).
-// TraceIds, query and attribute_redaction are mutually exclusive operations.
+// TraceIds, query, attribute_redaction and attribute_redactions are mutually exclusive operations.
 message RedactionDetail {
   option (gogoproto.equal) = true;
   option (gogoproto.compare) = true;
@@ -88,6 +90,7 @@ message RedactionDetail {
   int64 start_time_unix_nano = 5;
   int64 end_time_unix_nano = 6;
   AttributeRedaction attribute_redaction = 7; // replace matching attribute values
+  repeated AttributeRedaction attribute_redactions = 8; // paired enc./bi. rules
 }
 
 // JobDetail contains the specific details for each job type
@@ -136,8 +139,8 @@ message SubmitRedactionRequest {
   string tenant_id = 1 [deprecated = true]; // ignored by the server; tenant is read from the request header
   repeated bytes trace_ids = 2;
   // selector is a single-member oneof for now, reserving room to migrate trace_ids into
-  // it later without an API break. Trace IDs, query and attribute_redaction are mutually
-  // exclusive, enforced at submission.
+  // it later without an API break. Trace IDs, query, attribute_redaction and
+  // attribute_redactions are mutually exclusive, enforced at submission.
   oneof selector {
     TraceQLSelector query = 3;
   }
@@ -149,6 +152,7 @@ message SubmitRedactionRequest {
   int64 start_time_unix_nano = 5;
   int64 end_time_unix_nano = 6;
   AttributeRedaction attribute_redaction = 7;
+  repeated AttributeRedaction attribute_redactions = 8; // adjacent enc./bi. pairs
 }
 
 message SubmitRedactionResponse {
@@ -205,6 +209,7 @@ message RedactionBatch {
   int64 start_time_unix_nano = 10;
   int64 end_time_unix_nano = 11;
   AttributeRedaction attribute_redaction = 12; // stored and injected into each per-block job
+  repeated AttributeRedaction attribute_redactions = 13; // stored and injected into each per-block job
 }
 
 // RedactionBatches is the top-level container written to batches.pb.
