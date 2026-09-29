@@ -1,5 +1,7 @@
 <!-- next version -->
 
+- `traceql`: Allow native literal `@>`/`!@>` on stored `enc.*` string attributes for ciphertext inspection. These operators do not decrypt values; blind-index arrays still require the internal sequence operators.
+
 # v3.1.0-rc.1
 
 ## 🧰 Bug fixes 🧰

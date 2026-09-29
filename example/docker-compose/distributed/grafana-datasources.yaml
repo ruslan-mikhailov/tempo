@@ -31,7 +31,7 @@ datasources:
   basicAuth: false
   isDefault: true
   version: 0 # Reapply protected settings on startup even when the existing datasource version advanced.
-  editable: false
+  editable: true
   apiVersion: 1
   uid: tempo-streaming-enabled
   jsonData:
@@ -45,6 +45,8 @@ datasources:
     streamingEnabled:
       search: true
       metrics: true
+  secureJsonData:
+    httpHeaderValue1: single-tenant
 - name: Tempo (no streaming)
   type: tempo
   access: proxy
@@ -53,7 +55,7 @@ datasources:
   basicAuth: false
   isDefault: false
   version: 0
-  editable: false
+  editable: true
   apiVersion: 1
   uid: tempo-streaming-disabled
   jsonData:
@@ -64,3 +66,5 @@ datasources:
     httpMethod: GET
     serviceMap:
       datasourceUid: prometheus
+  secureJsonData:
+    httpHeaderValue1: single-tenant
