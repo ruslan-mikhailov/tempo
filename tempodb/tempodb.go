@@ -785,27 +785,24 @@ func (rw *readerWriter) RedactBlock(ctx context.Context, meta *backend.BlockMeta
 	}
 
 	if len(out) == 0 {
-		err = rw.c.MarkBlockCompacted(uuid.UUID(meta.BlockID), tenantID)
-		if err != nil {
-			return false, 0, nil, fmt.Errorf("error marking block compacted, blockID: %s: %w", meta.BlockID.String(), err)
+		if err := rw.markRedactionSourceCompacted(ctx, meta, nil, tenantID); err != nil {
+			return false, 0, nil, err
 		}
 		return true, nFound, nil, nil
 	}
 
 	if len(out) != 1 {
 		if meta.TotalObjects == int64(nFound) {
-			err = rw.c.MarkBlockCompacted(uuid.UUID(meta.BlockID), tenantID)
-			if err != nil {
-				return false, 0, nil, fmt.Errorf("error marking block compacted, blockID: %s: %w", meta.BlockID.String(), err)
+			if err := rw.markRedactionSourceCompacted(ctx, meta, nil, tenantID); err != nil {
+				return false, 0, nil, err
 			}
 			return true, nFound, nil, nil
 		}
 		return false, 0, nil, fmt.Errorf("expected 1 output block, got %d", len(out))
 	}
 
-	err = rw.c.MarkBlockCompacted(uuid.UUID(meta.BlockID), tenantID)
-	if err != nil {
-		return false, 0, nil, fmt.Errorf("error marking block compacted, blockID: %s: %w", meta.BlockID.String(), err)
+	if err := rw.markRedactionSourceCompacted(ctx, meta, out[0], tenantID); err != nil {
+		return false, 0, nil, err
 	}
 	return true, nFound, out[0], nil
 }
@@ -945,6 +942,9 @@ func includeBlock(b *backend.BlockMeta, _ common.ID, blockStart, blockEnd []byte
 
 // if block is compacted within lookback period, and is within shard ranges, include it in search
 func includeCompactedBlock(c *backend.CompactedBlockMeta, id common.ID, blockStart, blockEnd []byte, poll time.Duration, timeStart, timeEnd time.Time) bool {
+	if c.RedactionSource {
+		return false
+	}
 	lookback := time.Now().Add(-(2 * poll))
 	if c.CompactedTime.Before(lookback) {
 		return false

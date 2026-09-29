@@ -3,6 +3,7 @@ package tempodb
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -264,4 +265,64 @@ func TestRedactBlockAttributesServiceNameSearchMetadata(t *testing.T) {
 			require.Empty(t, survivingTraceIDs(t, r, out, "{ rootServiceName = `"+secretPrefix+"service` }"))
 		})
 	}
+}
+
+// A public trace-by-ID read must not return the pre-redaction block during the
+// compacted-block lookback. Reading the new block directly misses this leak:
+// Find also searches recently compacted blocks after a blocklist poll.
+func TestRedactBlockAttributesFindDoesNotExposeOriginalValue(t *testing.T) {
+	r, _, c, _ := testConfig(t, time.Hour)
+	rw := r.(*readerWriter)
+	ctx, cancel := context.WithCancel(context.Background())
+	r.EnablePolling(ctx, &mockJobSharder{}, false)
+	t.Cleanup(func() {
+		cancel()
+		r.Shutdown()
+	})
+
+	id := make([]byte, 16)
+	id[15] = 1
+	const prefix = "enc:v1:630dcd2966c4336691125448bbb25b4f:"
+	batch := test.MakeBatchWithAttributes(1, id, nil)
+	batch.ScopeSpans[0].Spans[0].Attributes = append(batch.ScopeSpans[0].Spans[0].Attributes,
+		attrString("enc.api.token", prefix+"payload"))
+	meta := attributeTestBlock(t, rw, encoding.DefaultEncoding().Version(), nil, []testData{
+		{id: id, t: &tempopb.Trace{ResourceSpans: []*v1_trace.ResourceSpans{batch}}},
+	})
+	r.PollNow(ctx)
+	require.Len(t, r.BlockMetas(testTenantID), 1)
+
+	rewrote, found, replacement, err := c.RedactBlockAttributes(ctx, meta, testTenantID,
+		&tempopb.AttributeRedaction{Key: "span.enc.api.token", ValuePrefix: prefix},
+		tempopb.RedactionMode_REDACTION_MODE_APPLY, RedactionWindow{})
+	require.NoError(t, err)
+	require.True(t, rewrote)
+	require.Equal(t, 1, found)
+	require.NotNil(t, replacement)
+	metas := r.BlockMetas(testTenantID)
+	require.Len(t, metas, 1)
+	require.Equal(t, replacement.BlockID, metas[0].BlockID)
+	live, compacted, err := r.BlockMeta(ctx, testTenantID, meta.BlockID)
+	require.NoError(t, err)
+	require.Nil(t, live)
+	require.NotNil(t, compacted)
+	require.True(t, compacted.RedactionSource, "the durable compacted source must not be eligible for trace lookback")
+	// The worker's store must stop serving the source block as soon as the
+	// replacement is committed, without waiting for the next blocklist poll.
+	assertSanitized := func() {
+		results, blockErrs, err := r.Find(ctx, testTenantID, id, BlockIDMin, BlockIDMax,
+			time.Time{}, time.Time{}, common.DefaultSearchOptions())
+		require.NoError(t, err)
+		require.Empty(t, blockErrs)
+		require.NotEmpty(t, results)
+		for _, result := range results {
+			value := attributeValue(result.Trace.ResourceSpans[0].ScopeSpans[0].Spans[0].Attributes, "enc.api.token")
+			require.False(t, strings.HasPrefix(value, prefix), "trace-by-ID returned an unsanitized copy")
+			require.Equal(t, common.RedactedAttributeValue, value)
+		}
+	}
+	assertSanitized()
+	r.PollNow(ctx)
+
+	assertSanitized()
 }

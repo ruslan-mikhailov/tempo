@@ -1073,7 +1073,7 @@ tempo-cli redact --tenant=my-tenant --attribute=span.enc.secret --value-prefix='
 
 This leaves the trace, its trace ID, spans, and other attributes intact; it does not delete the trace or replace just the prefix. Use `resource.<key>` for a resource attribute instead. The rule only affects the selected tenant. Add `--dry-run` to count traces with at least one matching value without changing blocks; counts are per trace, not per attribute. `--start` and `--end` can limit the scan to a time window.
 
-Only string values with the specified prefix are replaced. Redaction of stored blocks is irreversible; values in ingesters or traces arriving after the run are not affected. A cached search result may remain stale until its cache entry expires. Submit attribute rules only after the scheduler and every worker understand them: older workers may silently ignore the rule.
+Only string values with the specified prefix are replaced. Redaction of stored blocks is irreversible; values in ingesters or traces arriving after the run are not affected. After jobs finish, allow a backend blocklist poll before verifying a trace by ID: the replacement must become visible on the reader. Tempo excludes the retired source of a redaction from the usual compacted-block read lookback, but a copy still held by an ingester can appear in an all-sources trace-by-ID query until it ages out. A cached search result may remain stale until its cache entry expires. Submit attribute rules only after the scheduler and every worker understand them: older workers may silently ignore the rule.
 
 ### Submit through the gRPC API
 

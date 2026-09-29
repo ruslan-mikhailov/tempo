@@ -1,5 +1,6 @@
 <!-- next version -->
 
+- `redaction`: Stop serving a redaction source from the rewriting worker's blocklist before its next poll, and report dry-run matches as `block_rewrote=false` in scheduler logs. Other readers and live-store copies retain their existing polling and aging behavior.
 - `traceql`: Allow native literal `@>`/`!@>` on stored `enc.*` string attributes for ciphertext inspection. These operators do not decrypt values; blind-index arrays still require the internal sequence operators.
 
 # v3.1.0-rc.1

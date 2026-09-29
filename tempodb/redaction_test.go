@@ -146,6 +146,46 @@ func TestRedactBlockQuerySelector(t *testing.T) {
 	})
 }
 
+// A block whose only trace is removed has no replacement. Neither the live
+// blocklist nor compacted-block lookback may still return that trace.
+func TestRedactBlockAllTracesDisappearsBeforeBlocklistPoll(t *testing.T) {
+	r, w, c, _ := testConfig(t, time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	r.EnablePolling(ctx, &mockJobSharder{}, false)
+	t.Cleanup(func() {
+		cancel()
+		r.Shutdown()
+	})
+
+	id := test.ValidTraceID(nil)
+	now := uint32(time.Now().Unix())
+	blk := cutTestBlockWithTraces(t, w, []testData{{
+		id: id, t: traceWithResourceAttr(id, "namespace", "secret"), start: now, end: now,
+	}})
+	meta := blk.BlockMeta()
+	r.PollNow(ctx)
+	require.Len(t, r.BlockMetas(testTenantID), 1)
+
+	rewrote, found, replacement, err := c.RedactBlock(ctx, meta, testTenantID, nil,
+		`{resource.namespace = "secret"}`, tempopb.RedactionMode_REDACTION_MODE_APPLY, RedactionWindow{})
+	require.NoError(t, err)
+	require.True(t, rewrote)
+	require.Equal(t, 1, found)
+	require.Nil(t, replacement)
+	require.Empty(t, r.BlockMetas(testTenantID))
+
+	assertDeleted := func() {
+		results, blockErrs, err := r.Find(ctx, testTenantID, id, BlockIDMin, BlockIDMax,
+			time.Time{}, time.Time{}, common.DefaultSearchOptions())
+		require.NoError(t, err)
+		require.Empty(t, blockErrs)
+		require.Empty(t, results)
+	}
+	assertDeleted()
+	r.PollNow(ctx)
+	assertDeleted()
+}
+
 // TestRedactBlockTwoSidedWindowBoundsTheScan verifies a fully-specified window bounds which traces inside a
 // block are matched, not only which blocks are selected.
 //

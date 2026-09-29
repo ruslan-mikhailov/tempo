@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/google/uuid"
-
 	"github.com/grafana/tempo/v3/pkg/tempopb"
 	"github.com/grafana/tempo/v3/tempodb/backend"
 	"github.com/grafana/tempo/v3/tempodb/encoding"
@@ -100,8 +98,8 @@ func (rw *readerWriter) RedactBlockAttributes(ctx context.Context, meta *backend
 	if len(out) != 1 {
 		return false, 0, nil, fmt.Errorf("expected one replacement for block %s, got %d", meta.BlockID, len(out))
 	}
-	if err := rw.c.MarkBlockCompacted(uuid.UUID(meta.BlockID), tenantID); err != nil {
-		return false, 0, nil, fmt.Errorf("marking block %s compacted: %w", meta.BlockID, err)
+	if err := rw.markRedactionSourceCompacted(ctx, meta, out[0], tenantID); err != nil {
+		return false, 0, nil, err
 	}
 	return true, found, out[0], nil
 }

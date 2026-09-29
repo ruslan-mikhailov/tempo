@@ -1085,9 +1085,23 @@ Disabled tenant compaction or a dry run with all overlapping blocks busy returns
 `FailedPrecondition`; no tenant blocks or no blocks overlapping the window returns
 `NotFound`.
 
-This is a one-time rewrite of stored blocks, not an ingestion-time redaction policy.
-Traces still in ingest or arriving after the submission aren't covered.
-Cached search results can temporarily show old data.
+This is a one-time rewrite of backend blocks, not an ingestion-time redaction policy.
+Traces still in ingest or arriving after submission aren't covered. An APPLY job writes
+a replacement block, marks its source compacted, and updates that worker's blocklist;
+other readers discover the replacement on their next blocklist poll. A retired source
+is excluded from normal compacted-block trace-by-ID lookback, but its objects remain
+in backend storage until `compacted_block_retention` expires and retention clears them
+(one hour by default). An explicit stale block-ID request can still read that source.
+The live-store also keeps independent, unredacted copies of recent traces (completed
+local blocks remain queryable for 20 minutes after their trace end time by default).
+Normal trace-by-ID queries merge live-store and backend results, so a completed APPLY
+batch or quiescence log does **not** guarantee the old value has stopped appearing.
+Cached search results can also temporarily show old data. For diagnostics, a
+`mode=blocks` trace-by-ID request sent **directly to a querier** isolates backend
+blocks; the query-frontend ignores an incoming mode and always fans out to both
+live-store and backend. Compare those results only after readers have polled.
+Do not treat a queued job count or a batch completion log as proof of immediate
+erasure from all readers and storage.
 Upgrade **both** the backend scheduler and all backend workers before sending
 attribute rules: older workers can ignore the new field and report success
 without replacing any values.

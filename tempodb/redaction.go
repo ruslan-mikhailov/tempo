@@ -1,8 +1,12 @@
 package tempodb
 
 import (
+	"context"
 	"fmt"
 	"math"
+
+	"github.com/google/uuid"
+	"github.com/grafana/tempo/v3/tempodb/backend"
 )
 
 // RedactionWindow bounds the per-block scan of a query or attribute redaction.
@@ -82,4 +86,23 @@ func (w RedactionWindow) fetchBounds() (start, end uint64, ok bool) {
 	}
 
 	return uint64(lo), uint64(hi), true
+}
+
+// markRedactionSourceCompacted marks the source as hidden from compacted-block
+// lookback reads. Publish the replacement to the local blocklist after the
+// backend transition succeeds, so this store does not serve the old data while
+// waiting for its next poll. Other store replicas discover it by polling.
+func (rw *readerWriter) markRedactionSourceCompacted(ctx context.Context, meta *backend.BlockMeta, replacement *backend.BlockMeta, tenantID string) error {
+	source := *meta
+	source.RedactionSource = true
+	if err := rw.w.WriteBlockMeta(ctx, &source); err != nil {
+		return fmt.Errorf("marking redaction source %s in block metadata: %w", meta.BlockID, err)
+	}
+	if err := rw.c.MarkBlockCompacted(uuid.UUID(meta.BlockID), tenantID); err != nil {
+		return fmt.Errorf("marking redaction source %s compacted: %w", meta.BlockID, err)
+	}
+	if replacement == nil {
+		return rw.MarkBlocklistCompacted(tenantID, []*backend.BlockMeta{&source}, nil)
+	}
+	return rw.MarkBlocklistCompacted(tenantID, []*backend.BlockMeta{&source}, []*backend.BlockMeta{replacement})
 }

@@ -442,7 +442,8 @@ func (s *BackendScheduler) UpdateJob(ctx context.Context, req *tempopb.UpdateJob
 					"job_id", req.JobId,
 					"tenant", j.Tenant(),
 					"block_id", j.JobDetail.GetRedaction().GetBlockId(),
-					"block_rewrote", req.Redaction.TracesFound > 0,
+					"mode", j.JobDetail.GetRedaction().GetMode().String(),
+					"block_rewrote", req.Redaction.TracesFound > 0 && !j.JobDetail.GetRedaction().GetMode().IsDryRun(),
 					"traces_found", req.Redaction.TracesFound)
 			}
 			s.cleanupBatchIfDone(ctx, j.Tenant())
