@@ -21,8 +21,13 @@ datasources:
   url: http://loki:3100
   basicAuth: false
   isDefault: false
-  version: 1
+  version: 0 # Reapply the deletion bridge settings to an existing provisioned datasource.
   editable: false
+  jsonData:
+    protectedDeletionCompactorURL: http://loki:3100
+    httpHeaderName1: X-Scope-OrgID
+  secureJsonData:
+    httpHeaderValue1: fake # Loki's fixed no-auth tenant; never a browser-supplied tenant.
 - name: Tempo (yes streaming)
   type: tempo
   access: proxy

@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 
 ENDPOINT = os.environ.get("LOKI_PUSH_URL", "http://alloy-logs:3500/loki/api/v1/push")
 INTERVAL_SECONDS = 5
+ENTRY_COUNT = int(os.environ.get("SECRET_LOG_ENTRIES", "24"))
 CUSTOMERS = ("alice@example.invalid", "bob@example.invalid")
 
 
@@ -41,17 +42,19 @@ def send_push(payload, endpoint=ENDPOINT):
 
 
 def main():
-    sequence = 0
-    while True:
+    sent = 0
+    while sent < ENTRY_COUNT:
         try:
-            status = send_push(make_push(sequence))
+            status = send_push(make_push(sent))
         except HTTPError as error:
             status = error.code
         except (URLError, TimeoutError):
             status = "unavailable"
+        if status == 204:
+            sent += 1
         print(f"loki_push_status={status}", flush=True)
-        sequence += 1
-        time.sleep(INTERVAL_SECONDS)
+        if sent < ENTRY_COUNT:
+            time.sleep(INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# Local plaintext-log demo only. Loki data is ephemeral when the container is removed.
+# Local disposable protected-log demo. Deletion is enabled for the built-in "fake" tenant.
 auth_enabled: false
 
 server:
@@ -24,3 +24,17 @@ schema_config:
       index:
         prefix: index_
         period: 24h
+
+# Allow explicit delete requests without age-based retention of other demo logs.
+limits_config:
+  deletion_mode: filter-and-delete
+  retention_period: 0s
+
+compactor:
+  working_directory: /tmp/loki/compactor
+  delete_request_store: filesystem
+  retention_enabled: true
+  # Short delays make an asynchronous request observable in this disposable demo.
+  compaction_interval: 1m
+  delete_request_cancel_period: 1m
+  retention_delete_delay: 1m
