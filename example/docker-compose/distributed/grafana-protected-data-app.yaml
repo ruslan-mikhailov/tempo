@@ -1,0 +1,6 @@
+apiVersion: 1
+
+apps:
+  - type: protected-data-app
+    org_id: 1
+    disabled: false

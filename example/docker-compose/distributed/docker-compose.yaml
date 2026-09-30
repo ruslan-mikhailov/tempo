@@ -318,12 +318,13 @@ services:
     image: tempo-protected-grafana:dev
     volumes:
       - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+      - ./grafana-protected-data-app.yaml:/etc/grafana/provisioning/plugins/protected-data-app.yaml:ro
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_AUTH_DISABLE_LOGIN_FORM=false
       - GF_DEFAULT_APP_MODE=development
-      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=tempo,loki
+      - GF_PLUGINS_ALLOW_LOADING_UNSIGNED_PLUGINS=tempo,loki,protected-data-app
       - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor metricsSummary
       - GF_FEATURE_TOGGLES_splashScreen=false
     ports:
