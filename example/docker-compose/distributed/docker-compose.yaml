@@ -268,7 +268,7 @@ services:
       OTLP_ENDPOINT: http://alloy:4318/v1/traces
     volumes:
       - ./generate-secret-traces.py:/opt/demo/generate-secret-traces.py:ro
-    restart: always
+    restart: "no" # One nested mission trace; a successful producer exits without replaying it.
     depends_on:
       - alloy
   alloy:

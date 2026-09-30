@@ -9,7 +9,7 @@ receivers:
 processors:
   encrypted_attributes:
     policies:
-      - span_attributes: [secret, api.token]
+      - span_attributes: [secret, api.token, agent.name, agent.number]
         key_file: /etc/alloy/secret-key
         value_scheme: aes256siv-hkdf-v1
         substring_index: ordered-trigram-v1
