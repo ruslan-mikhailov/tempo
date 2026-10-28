@@ -1,0 +1,6 @@
+change_type: enhancement
+component: query-frontend
+note: Reduce CPU and memory use when encoding trace-by-ID JSON responses.
+issues: []
+subtext:
+user: ruslan-mikhailov
